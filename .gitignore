@@ -1,0 +1,7 @@
+﻿app/
+bin/
+obj/
+.gradle/
+build/
+*.user
+.vs/
