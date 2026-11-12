@@ -5,3 +5,5 @@ build/
 *.user
 .vs/
 .superpowers/
+app/*
+!app/.gitkeep
