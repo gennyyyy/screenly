@@ -1,7 +1,7 @@
-﻿app/
-bin/
+﻿bin/
 obj/
 .gradle/
 build/
 *.user
 .vs/
+.superpowers/

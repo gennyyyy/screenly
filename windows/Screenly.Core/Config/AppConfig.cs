@@ -1,0 +1,18 @@
+using System.Text.Json;
+
+namespace Screenly.Core.Config;
+
+public sealed record AppConfig
+{
+    public int Version { get; init; } = 1;
+    public int Port { get; init; } = 7543;
+    public VirtualDisplayConfig VirtualDisplay { get; init; } = new();
+    public EncodingConfig Encoding { get; init; } = new();
+    public PairingConfig Pairing { get; init; } = new();
+    public bool AutoStart { get; init; }
+    public bool FirewallRuleAdded { get; init; }
+}
+
+public sealed record VirtualDisplayConfig(int Width = 1920, int Height = 1080, int RefreshHz = 60);
+public sealed record EncodingConfig(int BitrateKbps = 8000, int KeyframeIntervalSec = 2);
+public sealed record PairingConfig(bool PinEnabled = false, string? PinHash = null, string? Salt = null);

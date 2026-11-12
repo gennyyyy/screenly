@@ -1,0 +1,12 @@
+<Window x:Class="Screenly.Host.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Screenly" Height="400" Width="500">
+    <Grid Margin="10">
+        <StackPanel>
+            <TextBlock Text="Screenly host control" FontSize="16" Margin="0,0,0,10"/>
+            <TextBlock Text="Engine runs as a separate process. Use tray icon to start/stop." />
+            <TextBlock Text="Configure in %APPDATA%\Screenly\config.json" Margin="0,10,0,0"/>
+        </StackPanel>
+    </Grid>
+</Window>
