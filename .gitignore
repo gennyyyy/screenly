@@ -7,3 +7,4 @@ build/
 .superpowers/
 app/*
 !app/.gitkeep
+local.properties

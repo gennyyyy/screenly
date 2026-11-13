@@ -32,6 +32,8 @@ Filename: "{app}\{#MyAppExeName}"; Description: "Launch Screenly"; Flags: nowait
 
 [Code]
 procedure CurStepChanged(CurStep: TSetupStep);
+var
+  ResultCode: Integer;
 begin
   if CurStep = ssPostInstall then
   begin

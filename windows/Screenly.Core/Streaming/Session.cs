@@ -88,10 +88,10 @@ public sealed class StreamServer : IAsyncDisposable
 
     private async Task MonitorSessionAsync(Session session, CancellationToken ct)
     {
+        var pingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         try
         {
             // Keepalive: send PING every 5s; disconnect if no PONG within 10s.
-            using var pingCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
             var pingTask = Task.Run(async () =>
             {
                 while (!pingCts.IsCancellationRequested)
@@ -111,6 +111,7 @@ public sealed class StreamServer : IAsyncDisposable
         finally
         {
             pingCts.Cancel();
+            pingCts.Dispose();
             lock (_lock) _sessions.Remove(session);
             ClientDisconnected?.Invoke(session);
             await session.DisposeAsync();

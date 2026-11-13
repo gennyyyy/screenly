@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.screenly.discovery.Host
 import com.screenly.discovery.discoverHosts
@@ -72,7 +73,7 @@ fun ScreenlyApp(activity: Activity) {
                         scope.launch {
                             if (client.connect(h.host, h.port)) {
                                 val dm = activity.resources.displayMetrics
-                                client.send(ClientMsg.Hello(deviceName = android.os.Build.MODEL, screenWidth = dm.widthPixels, screenHeight = dm.heightPixels, densityDpi = dm.densityDpi))
+                                client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = dm.widthPixels, screenHeight = dm.heightPixels, densityDpi = dm.densityDpi))
                             }
                         }
                     }, Modifier.fillMaxWidth()) { Text("${h.name} (${h.host})") }

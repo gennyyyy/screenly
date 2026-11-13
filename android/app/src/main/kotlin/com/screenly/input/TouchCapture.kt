@@ -26,6 +26,6 @@ class TouchCapture(private val client: ScreenlyClient, private val streamW: () -
             val y = ev.getY(i) * sh / viewH
             events.add(TouchEvt(type, ev.getPointerId(i), x, y, ev.getPressure(i), System.nanoTime() / 1000))
         }
-        scope.launch { client.send(ClientMsg.InputTouch(events)) }
+        scope.launch { client.send(InputTouch(events)) }
     }
 }

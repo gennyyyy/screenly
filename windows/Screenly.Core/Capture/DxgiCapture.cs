@@ -26,7 +26,7 @@ public sealed class DxgiCapture : ICapture
 
     public bool TryGetFrame(out CapturedFrame frame)
     {
-        frame = default;
+        frame = new CapturedFrame(IntPtr.Zero, 0, 0, 0);
         // TODO: return latest frame from single-slot buffer; null if none ready.
         return false;
     }

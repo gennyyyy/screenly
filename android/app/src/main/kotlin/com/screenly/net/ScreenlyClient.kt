@@ -3,6 +3,7 @@ package com.screenly.net
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import java.io.DataInputStream
+import java.io.IOException
 import java.io.DataOutputStream
 import java.net.Socket
 import java.nio.ByteBuffer
@@ -70,7 +71,7 @@ class ScreenlyClient {
                 val ts = bb.long
                 val w = bb.short.toInt() and 0xFFFF
                 val h = bb.short.toInt() and 0xFFFF
-                val flags = bb.get()
+                val flags = bb.get().toInt()
                 val nal = ByteArray(bb.remaining())
                 bb.get(nal)
                 _events.tryEmit(ServerEvent.Frame(seq, ts, w, h, (flags and 1) == 1, nal))
