@@ -10,6 +10,7 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
@@ -21,6 +22,7 @@ import com.screenly.net.Hello
 import com.screenly.net.ScreenlyClient
 import com.screenly.net.ServerEvent
 import com.screenly.service.ConnectionService
+import com.screenly.input.TouchCapture
 import com.screenly.video.VideoDecoder
 import kotlinx.coroutines.launch
 
@@ -42,6 +44,7 @@ fun ScreenlyApp(activity: Activity) {
     var streamH by remember { mutableIntStateOf(1080) }
     val surfaceView = remember { SurfaceView(activity) }
     val decoder = remember { VideoDecoder(surfaceView.holder) }
+    DisposableEffect(Unit) { onDispose { decoder.release() } }
 
     LaunchedEffect(Unit) {
         scope.launch { discoverHosts(activity).collect { hosts = it } }
@@ -60,6 +63,7 @@ fun ScreenlyApp(activity: Activity) {
                     }
                     is ServerEvent.Disconnected -> {
                         connected = false
+                        client.close()
                         activity.stopService(Intent(activity, ConnectionService::class.java))
                     }
                     else -> {}
@@ -86,7 +90,11 @@ fun ScreenlyApp(activity: Activity) {
                 if (hosts.isEmpty()) Text("Searching for hosts on LAN…")
             }
         } else {
-            AndroidView(factory = { surfaceView }, modifier = Modifier.fillMaxSize())
+            AndroidView(factory = { _ ->
+                val tc = TouchCapture(client, { streamW }, { streamH })
+                surfaceView.setOnTouchListener { _, ev -> tc.handle(ev, surfaceView.width, surfaceView.height); true }
+                surfaceView
+            }, modifier = Modifier.fillMaxSize())
         }
     }
 }

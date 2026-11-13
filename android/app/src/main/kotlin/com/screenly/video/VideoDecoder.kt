@@ -13,7 +13,8 @@ class VideoDecoder(private val holder: SurfaceHolder) {
 
     fun configure(w: Int, h: Int) {
         if (w == width && h == height && codec != null) return
-        codec?.stop(); codec?.release()
+        try { codec?.stop() } catch (_: Exception) { }
+        try { codec?.release() } catch (_: Exception) { }
         width = w; height = h
         val surface = holder.surface ?: run { pendingFrame = null; return }
         val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h)
@@ -44,7 +45,7 @@ class VideoDecoder(private val holder: SurfaceHolder) {
                 c.releaseOutputBuffer(outIdx, true)
                 outIdx = c.dequeueOutputBuffer(info, 0)
             }
-        } catch (_: Exception) { }
+        } catch (e: Exception) { android.util.Log.e("VideoDecoder", "decode failed", e) }
     }
 
     fun release() { try { codec?.stop(); codec?.release() } catch (_: Exception) { }; codec = null }

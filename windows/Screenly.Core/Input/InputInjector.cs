@@ -18,14 +18,13 @@ public static class InputInjector
     // Multi-touch: build INPUT[] array and call SendInput once.
     public static void InjectTouch(IEnumerable<TouchEvent> events, int streamW, int streamH, int displayW, int displayH)
     {
+        if (streamW <= 0 || streamH <= 0 || displayW <= 0 || displayH <= 0) return;
         // TODO: scale coords (x*displayW/streamW), build INPUT structs with MOUSEEVENTF_*, call SendInput.
         // Pressure ignored in v1 (SendInput mouse has no pressure); use RealTimeStylus for pen pressure.
         foreach (var e in events)
         {
-            if (streamW <= 0 || streamH <= 0) return;
             int px = (int)(e.X * displayW / (float)streamW);
             int py = (int)(e.Y * displayH / (float)streamH);
-            // placeholder: no-op until P/Invoke wired
             _ = (px, py);
         }
     }

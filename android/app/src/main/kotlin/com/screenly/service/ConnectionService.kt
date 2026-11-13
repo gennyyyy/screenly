@@ -26,7 +26,7 @@ class ConnectionService : Service() {
             .build()
         startForeground(1, notif)
         val pm = getSystemService(POWER_SERVICE) as PowerManager
-        wakeLock = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "screenly:conn").apply { acquire() }
+        wakeLock = pm.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK, "screenly:conn").apply { acquire(10 * 60 * 1000L) }
         return START_STICKY
     }
 
