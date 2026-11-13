@@ -47,14 +47,17 @@ class ScreenlyClient {
         try {
             val inp = input ?: return
             while (true) {
-                val len = inp.readInt() // 4 bytes
+                val lenBuf = ByteArray(4)
+                inp.readFully(lenBuf)
+                val len = ByteBuffer.wrap(lenBuf).order(ByteOrder.LITTLE_ENDIAN).int
                 if (len < 1 || len > Protocol.MAX_SIZE) throw IOException("bad len")
                 val type = inp.readByte()
                 val payload = ByteArray(len - 1)
-                inp.readFully(payload)
+                if (payload.isNotEmpty()) inp.readFully(payload)
                 dispatch(type, payload)
             }
         } catch (e: Exception) {
+            try { socket?.close() } catch (_: Exception) { }
             _events.tryEmit(ServerEvent.Disconnected)
         }
     }
@@ -100,7 +103,9 @@ class ScreenlyClient {
         try {
             val out = output ?: return
             synchronized(out) {
-                out.writeInt(1 + bytes.size)
+                val lenBuf = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN)
+                lenBuf.putInt(1 + bytes.size)
+                out.write(lenBuf.array())
                 out.writeByte(type.toInt())
                 out.write(bytes)
                 out.flush()
@@ -109,7 +114,12 @@ class ScreenlyClient {
     }
 
     fun close() {
+        scope.cancel()
+        try { input?.close() } catch (_: Exception) { }
+        try { output?.close() } catch (_: Exception) { }
         try { socket?.close() } catch (_: Exception) { }
         socket = null
+        input = null
+        output = null
     }
 }

@@ -22,6 +22,7 @@ public static class InputInjector
         // Pressure ignored in v1 (SendInput mouse has no pressure); use RealTimeStylus for pen pressure.
         foreach (var e in events)
         {
+            if (streamW <= 0 || streamH <= 0) return;
             int px = (int)(e.X * displayW / (float)streamW);
             int py = (int)(e.Y * displayH / (float)streamH);
             // placeholder: no-op until P/Invoke wired

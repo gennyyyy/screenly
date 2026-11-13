@@ -22,8 +22,9 @@ public static class ConfigStore
             var json = File.ReadAllText(ConfigPath);
             return JsonSerializer.Deserialize<AppConfig>(json, JsonOpts) ?? new AppConfig();
         }
-        catch
+        catch (Exception ex)
         {
+            Console.WriteLine($"ConfigStore.Load failed: {ex.Message}");
             return new AppConfig();
         }
     }

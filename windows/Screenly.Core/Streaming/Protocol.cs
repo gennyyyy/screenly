@@ -38,7 +38,9 @@ public static class Protocol
         await ReadExactAsync(stream, header, ct);
         var len = BitConverter.ToUInt32(header, 0);
         if (len < 1 || len > MaxMessageSize) throw new IOException("invalid message length");
-        var type = (MessageType)header[4];
+        var rawType = header[4];
+        if (!Enum.IsDefined(typeof(MessageType), rawType)) throw new IOException("unknown message type");
+        var type = (MessageType)rawType;
         var payload = new byte[len - 1];
         if (payload.Length > 0) await ReadExactAsync(stream, payload, ct);
         return (type, payload);

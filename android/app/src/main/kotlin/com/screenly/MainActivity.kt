@@ -41,24 +41,29 @@ fun ScreenlyApp(activity: Activity) {
     var streamW by remember { mutableIntStateOf(1920) }
     var streamH by remember { mutableIntStateOf(1080) }
     val surfaceView = remember { SurfaceView(activity) }
-    val decoder = remember { VideoDecoder(surfaceView.holder.surface) }
+    val decoder = remember { VideoDecoder(surfaceView.holder) }
 
     LaunchedEffect(Unit) {
-        discoverHosts(activity).collect { hosts = it }
-        client.events.collect { ev ->
-            when (ev) {
-                is ServerEvent.HelloAcked -> {
-                    connected = true
-                    ev.ack.config?.let { streamW = it.width; streamH = it.height }
-                    activity.startService(Intent(activity, ConnectionService::class.java))
+        scope.launch { discoverHosts(activity).collect { hosts = it } }
+        scope.launch {
+            client.events.collect { ev ->
+                when (ev) {
+                    is ServerEvent.HelloAcked -> {
+                        connected = true
+                        ev.ack.config?.let { streamW = it.width; streamH = it.height }
+                        activity.startService(Intent(activity, ConnectionService::class.java))
+                    }
+                    is ServerEvent.Frame -> {
+                        if (ev.w != streamW || ev.h != streamH) { streamW = ev.w; streamH = ev.h }
+                        decoder.configure(ev.w, ev.h)
+                        decoder.decode(ev.nal, ev.tsUs, ev.keyframe)
+                    }
+                    is ServerEvent.Disconnected -> {
+                        connected = false
+                        activity.stopService(Intent(activity, ConnectionService::class.java))
+                    }
+                    else -> {}
                 }
-                is ServerEvent.Frame -> {
-                    if (ev.w != streamW || ev.h != streamH) { streamW = ev.w; streamH = ev.h }
-                    decoder.configure(ev.w, ev.h)
-                    decoder.decode(ev.nal, ev.tsUs, ev.keyframe)
-                }
-                is ServerEvent.Disconnected -> connected = false
-                else -> {}
             }
         }
     }

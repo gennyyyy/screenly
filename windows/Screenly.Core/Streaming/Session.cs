@@ -36,8 +36,8 @@ public sealed class Session : IAsyncDisposable
                     await handler(type, payload);
                 }
             }
-            catch (IOException) { }
             catch (OperationCanceledException) { }
+            catch (Exception) { } // log in production
         }, ct);
 
     public async ValueTask DisposeAsync()

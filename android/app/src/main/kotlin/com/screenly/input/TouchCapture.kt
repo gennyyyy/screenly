@@ -9,10 +9,11 @@ import kotlinx.coroutines.*
 
 class TouchCapture(private val client: ScreenlyClient, private val streamW: () -> Int, private val streamH: () -> Int) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val queue = mutableListOf<TouchEvt>()
 
     fun handle(ev: MotionEvent, viewW: Int, viewH: Int) {
+        if (viewW <= 0 || viewH <= 0) return
         val sw = streamW(); val sh = streamH()
+        if (sw <= 0 || sh <= 0) return
         val events = mutableListOf<TouchEvt>()
         for (i in 0 until ev.pointerCount) {
             val type = when (ev.actionMasked) {
@@ -28,4 +29,6 @@ class TouchCapture(private val client: ScreenlyClient, private val streamW: () -
         }
         scope.launch { client.send(InputTouch(events)) }
     }
+
+    fun release() { scope.cancel() }
 }

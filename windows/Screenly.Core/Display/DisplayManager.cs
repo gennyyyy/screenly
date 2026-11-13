@@ -61,7 +61,7 @@ public sealed class DisplayManager : IDisposable
     public DisplayManager(IVirtualDisplay driver)
     {
         _driver = driver;
-        _watchdog = new Timer(_ => { try { _driver.PingAsync().GetAwaiter().GetResult(); } catch { } }, null, Timeout.Infinite, Timeout.Infinite);
+        _watchdog = new Timer(_ => { _ = Task.Run(async () => { try { await _driver.PingAsync(); } catch { } }); }, null, Timeout.Infinite, Timeout.Infinite);
     }
 
     public DisplayHandle? Active => _active;
