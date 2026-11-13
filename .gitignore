@@ -8,3 +8,5 @@ build/
 app/*
 !app/.gitkeep
 local.properties
+android/local.properties
+.idea/
