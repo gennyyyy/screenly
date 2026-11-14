@@ -58,6 +58,7 @@ public sealed class StreamServer : IAsyncDisposable
     public event Action<Session>? ClientDisconnected;
 
     public int Port { get; }
+    public Func<Session, MessageType, byte[], Task>? MessageHandler;
 
     public StreamServer(int port) => Port = port;
 
@@ -105,7 +106,7 @@ public sealed class StreamServer : IAsyncDisposable
             await session.ReceiveLoopAsync(async (type, payload) =>
             {
                 if (type == MessageType.Pong) return;
-                // handler dispatch is wired by engine; here we just keep alive
+                if (MessageHandler != null) await MessageHandler(session, type, payload);
             }, ct);
         }
         finally

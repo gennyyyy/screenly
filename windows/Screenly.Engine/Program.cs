@@ -17,6 +17,32 @@ public static class Program
         var server = new StreamServer(cfg.Port);
         server.ClientConnected += s => Console.WriteLine($"Client connected: {s.Id}");
         server.ClientDisconnected += s => Console.WriteLine($"Client disconnected: {s.Id}");
+        server.MessageHandler = async (session, type, payload) =>
+        {
+            switch (type)
+            {
+                case MessageType.Hello:
+                    Console.WriteLine("HELLO received");
+                    var ack = new { status = "ok", sessionId = session.Id.ToString(), pairingToken = (string?)null, config = new { width = cfg.VirtualDisplay.Width, height = cfg.VirtualDisplay.Height, fps = cfg.VirtualDisplay.RefreshHz, bitrateKbps = cfg.Encoding.BitrateKbps } };
+                    var ackJson = System.Text.Json.JsonSerializer.Serialize(ack);
+                    await session.SendAsync(MessageType.HelloAck, System.Text.Encoding.UTF8.GetBytes(ackJson));
+                    break;
+                case MessageType.Ping:
+                    await session.SendAsync(MessageType.Pong, Array.Empty<byte>());
+                    break;
+                case MessageType.Config:
+                    Console.WriteLine("CONFIG received");
+                    await session.SendAsync(MessageType.Config, payload);
+                    break;
+                case MessageType.InputTouch:
+                case MessageType.InputKey:
+                    // TODO: forward to InputInjector (needs scaling + SendInput)
+                    break;
+                case MessageType.Disconnect:
+                    Console.WriteLine("Client disconnect requested");
+                    break;
+            }
+        };
         server.Start();
 
         using var mdns = new MdnsBroadcaster(cfg.Port);
