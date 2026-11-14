@@ -87,7 +87,19 @@ fun ScreenlyApp(activity: Activity) {
                         }
                     }, Modifier.fillMaxWidth()) { Text("${h.name} (${h.host})") }
                 }
-                if (hosts.isEmpty()) Text("Searching for hosts on LAN…")
+                if (hosts.isEmpty()) Text("Searching for hosts on LAN… (or enter IP below)")
+                Spacer(Modifier.height(12.dp))
+                var ip by remember { mutableStateOf("") }
+                OutlinedTextField(value = ip, onValueChange = { ip = it }, label = { Text("Manual host IP") }, modifier = Modifier.fillMaxWidth())
+                Spacer(Modifier.height(8.dp))
+                Button(onClick = {
+                    if (ip.isNotBlank()) scope.launch {
+                        if (client.connect(ip.trim(), 7543)) {
+                            val dm = activity.resources.displayMetrics
+                            client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = dm.widthPixels, screenHeight = dm.heightPixels, densityDpi = dm.densityDpi))
+                        }
+                    }
+                }, Modifier.fillMaxWidth()) { Text("Connect to $ip") }
             }
         } else {
             AndroidView(factory = { _ ->

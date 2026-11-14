@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Screenly.Core.Config;
+using Screenly.Core.Discovery;
 using Screenly.Core.Display;
 using Screenly.Core.Streaming;
 
@@ -17,6 +18,10 @@ public static class Program
         server.ClientConnected += s => Console.WriteLine($"Client connected: {s.Id}");
         server.ClientDisconnected += s => Console.WriteLine($"Client disconnected: {s.Id}");
         server.Start();
+
+        using var mdns = new MdnsBroadcaster(cfg.Port);
+        mdns.Start();
+        Console.WriteLine("mDNS advertising _screenly._tcp");
 
         // Capture/encode loop is wired once DxgiCapture + H264Encoder are implemented.
         // For now, stream server accepts clients and handles control messages.
