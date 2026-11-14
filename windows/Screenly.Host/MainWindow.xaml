@@ -4,9 +4,8 @@
         Title="Screenly" Height="400" Width="500">
     <Grid Margin="10">
         <StackPanel>
-            <TextBlock Text="Screenly host control" FontSize="16" Margin="0,0,0,10"/>
-            <TextBlock Text="Engine runs as a separate process. Use tray icon to start/stop." />
-            <TextBlock Text="Configure in %APPDATA%\Screenly\config.json" Margin="0,10,0,0"/>
+            <TextBlock Text="Screenly" FontSize="20" FontWeight="Bold" Margin="0,0,0,10"/>
+            <TextBlock x:Name="InfoText" TextWrapping="Wrap" FontFamily="Consolas" />
         </StackPanel>
     </Grid>
 </Window>
