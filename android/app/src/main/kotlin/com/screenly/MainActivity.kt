@@ -37,10 +37,8 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun ScreenlyApp(activity: Activity) {
-    val scope = rememberCoroutineScope()
     val client = remember { ScreenlyClient() }
-    val prefs = activity.getSharedPreferences("screenly", android.content.Context.MODE_PRIVATE)
-    var lastHost by remember { mutableStateOf(prefs.getString("lastHost", "127.0.0.1")) }
+    // USB-only: always connect to localhost (adb reverse)
     var connected by remember { mutableStateOf(false) }
     var streamW by remember { mutableIntStateOf(1920) }
     var streamH by remember { mutableIntStateOf(1080) }
@@ -52,9 +50,8 @@ fun ScreenlyApp(activity: Activity) {
         // USB-only: auto-connect to localhost (adb reverse tcp:7543 tcp:7543)
         launch {
             kotlinx.coroutines.delay(500)
-            val host = lastHost ?: "127.0.0.1"
+            val host = "127.0.0.1"
             if (client.connect(host, 7543)) {
-                prefs.edit().putString("lastHost", host).apply()
                 val dm = activity.resources.displayMetrics
                 client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = dm.widthPixels, screenHeight = dm.heightPixels, densityDpi = dm.densityDpi))
             }
@@ -102,25 +99,10 @@ fun ScreenlyApp(activity: Activity) {
             Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()).imePadding()) {
                 Text("Screenly", style = MaterialTheme.typography.headlineMedium)
                 Spacer(Modifier.height(8.dp))
-                Text("USB mode: connect phone to PC via USB, then run on PC:")
-                Text("adb reverse tcp:7543 tcp:7543", style = MaterialTheme.typography.bodySmall)
+                Text("USB mode: connect phone to PC via USB.")
+                Text("The app connects automatically.")
                 Spacer(Modifier.height(12.dp))
-                Text("Connecting to ${lastHost ?: "127.0.0.1"}…")
-                Spacer(Modifier.height(12.dp))
-                var ip by remember { mutableStateOf(lastHost ?: "127.0.0.1") }
-                OutlinedTextField(value = ip, onValueChange = { ip = it }, label = { Text("Host IP (USB: 127.0.0.1)") }, modifier = Modifier.fillMaxWidth())
-                Spacer(Modifier.height(8.dp))
-                Button(onClick = {
-                    if (ip.isNotBlank()) scope.launch {
-                        val host = ip.trim()
-                        if (client.connect(host, 7543)) {
-                            prefs.edit().putString("lastHost", host).apply()
-                            lastHost = host
-                            val dm = activity.resources.displayMetrics
-                            client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = dm.widthPixels, screenHeight = dm.heightPixels, densityDpi = dm.densityDpi))
-                        }
-                    }
-                }, Modifier.fillMaxWidth()) { Text("Connect to $ip") }
+                Text("Connecting to 127.0.0.1…")
             }
         } else {
             AndroidView(factory = { _ ->
