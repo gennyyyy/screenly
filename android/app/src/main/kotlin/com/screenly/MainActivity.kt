@@ -8,17 +8,13 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 // USB-only: no mDNS discovery
-import com.screenly.net.ClientMsg
 import com.screenly.net.Hello
 import com.screenly.net.ScreenlyClient
 import com.screenly.net.ServerEvent
@@ -38,7 +34,6 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun ScreenlyApp(activity: Activity) {
     val client = remember { ScreenlyClient() }
-    // USB-only: always connect to localhost (adb reverse)
     var connected by remember { mutableStateOf(false) }
     var streamW by remember { mutableIntStateOf(1920) }
     var streamH by remember { mutableIntStateOf(1080) }
@@ -47,11 +42,12 @@ fun ScreenlyApp(activity: Activity) {
     DisposableEffect(Unit) { onDispose { decoder.release() } }
 
     LaunchedEffect(Unit) {
-        // USB-only: auto-connect to localhost with auto-reconnect
+        var firstAttempt = true
         launch {
             while (true) {
                 if (!connected) {
-                    kotlinx.coroutines.delay(2000)
+                    if (!firstAttempt) kotlinx.coroutines.delay(2000)
+                    firstAttempt = false
                     val host = "127.0.0.1"
                     if (client.connect(host, 7543)) {
                         val dm = activity.resources.displayMetrics
@@ -67,8 +63,6 @@ fun ScreenlyApp(activity: Activity) {
                 when (ev) {
                     is ServerEvent.HelloAcked -> {
                         connected = true
-                        // Persist the connected host
-                        // (host IP is not in ack; store from the connect call is handled separately)
                         ev.ack.config?.let { streamW = it.width; streamH = it.height }
                         activity.startService(Intent(activity, ConnectionService::class.java))
                     }
@@ -101,21 +95,20 @@ fun ScreenlyApp(activity: Activity) {
     }
 
     MaterialTheme {
-        if (!connected) {
-            Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()).imePadding()) {
-                Text("Screenly", style = MaterialTheme.typography.headlineMedium)
-                Spacer(Modifier.height(8.dp))
-                Text("USB mode: connect phone to PC via USB.")
-                Text("The app connects automatically.")
-                Spacer(Modifier.height(12.dp))
-                Text("Connecting to 127.0.0.1…")
-            }
-        } else {
+        Box(Modifier.fillMaxSize()) {
             AndroidView(factory = { _ ->
                 val tc = TouchCapture(client, { streamW }, { streamH })
                 surfaceView.setOnTouchListener { _, ev -> tc.handle(ev, surfaceView.width, surfaceView.height); true }
                 surfaceView
             }, modifier = Modifier.fillMaxSize())
+            if (!connected) {
+                Column(Modifier.fillMaxSize().padding(16.dp)) {
+                    Text("Screenly", style = MaterialTheme.typography.headlineMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Text("USB mode: connect phone to PC via USB.")
+                    Text("Connecting...")
+                }
+            }
         }
     }
 }
