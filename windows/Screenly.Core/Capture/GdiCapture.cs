@@ -126,10 +126,9 @@ public sealed class GdiCapture : ICapture
             else { hdcSrc = GetDC(IntPtr.Zero); createdDC = true; }
 
             var hdcMem = CreateCompatibleDC(hdcSrc);
-            var hBitmap = CreateCompatibleBitmap(hdcSrc, _encW, _encH);
+            var hBitmap = CreateCompatibleBitmap(hdcSrc, _width, _height);
             SelectObject(hdcMem, hBitmap);
-            SetStretchBltMode(hdcMem, 4); // HALFTONE
-            StretchBlt(hdcMem, 0, 0, _encW, _encH, hdcSrc, 0, 0, _width, _height, SRCCOPY);
+            BitBlt(hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
 
             // Composite cursor: yellow backing + native cursor outline
             var ci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
@@ -167,7 +166,7 @@ public sealed class GdiCapture : ICapture
             DeleteDC(hdcMem);
             if (createdDC) ReleaseDC(IntPtr.Zero, hdcSrc);
 
-            frame = new CapturedFrame(ms.ToArray(), _encW, _encH, (ulong)DateTime.UtcNow.Ticks);
+            frame = new CapturedFrame(ms.ToArray(), _width, _height, (ulong)DateTime.UtcNow.Ticks);
             return true;
         }
         catch { return false; }
