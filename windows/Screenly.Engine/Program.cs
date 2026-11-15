@@ -253,6 +253,62 @@ public static class Program
             }
         }, cts.Token);
 
+        // Cursor tracking: send shape on change, position at ~30 Hz
+        IntPtr lastCursorHandle = IntPtr.Zero;
+        _ = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                try
+                {
+                    var ci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
+                    if (GetCursorInfo(ref ci))
+                    {
+                        int cx = ci.ptScreenPos.x - capture.MonitorX;
+                        int cy = ci.ptScreenPos.y - capture.MonitorY;
+                        bool visible = (ci.flags & CURSOR_SHOWING) != 0 && cx >= 0 && cy >= 0 && cx < capture.Width && cy < capture.Height;
+                        if (!visible) { cx = 0; cy = 0; }
+
+                        // Send CursorShape if handle changed
+                        if (ci.hCursor != lastCursorHandle && ci.hCursor != IntPtr.Zero)
+                        {
+                            lastCursorHandle = ci.hCursor;
+                            var shape = CursorShapeCapture.Capture();
+                            if (shape != null)
+                            {
+                                var (w, h, hx, hy, png) = shape.Value;
+                                var shapePayload = new byte[16 + png.Length];
+                                BitConverter.TryWriteBytes(shapePayload.AsSpan(0), w);
+                                BitConverter.TryWriteBytes(shapePayload.AsSpan(4), h);
+                                BitConverter.TryWriteBytes(shapePayload.AsSpan(8), hx);
+                                BitConverter.TryWriteBytes(shapePayload.AsSpan(12), hy);
+                                Buffer.BlockCopy(png, 0, shapePayload, 16, png.Length);
+                                foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
+                                {
+                                    try { await s.SendAsync(MessageType.CursorShape, shapePayload, cts.Token); }
+                                    catch { }
+                                }
+                            }
+                        }
+
+                        // Send CursorPos
+                        var posPayload = new byte[17];
+                        BitConverter.TryWriteBytes(posPayload.AsSpan(0), cx);
+                        BitConverter.TryWriteBytes(posPayload.AsSpan(4), cy);
+                        posPayload[8] = visible ? (byte)1 : (byte)0;
+                        BitConverter.TryWriteBytes(posPayload.AsSpan(9), (ulong)DateTime.UtcNow.Ticks);
+                        foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
+                        {
+                            try { await s.SendAsync(MessageType.CursorPos, posPayload, cts.Token); }
+                            catch { }
+                        }
+                    }
+                }
+                catch { }
+                await Task.Delay(33, cts.Token);
+            }
+        }, cts.Token);
+
         // Capture + stream loop (~15 fps)
         uint seq = 0;
         var loop = Task.Run(async () =>

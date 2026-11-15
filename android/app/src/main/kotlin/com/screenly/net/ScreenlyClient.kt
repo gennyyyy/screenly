@@ -16,6 +16,7 @@ sealed interface ServerEvent {
     data class Errored(val e: ErrorMsg) : ServerEvent
     data object Ponged : ServerEvent
     data class CursorPos(val x: Int, val y: Int, val visible: Boolean, val tsUs: Long) : ServerEvent
+    data class CursorShape(val width: Int, val height: Int, val hotspotX: Int, val hotspotY: Int, val pngData: ByteArray) : ServerEvent
     data object Disconnected : ServerEvent
 }
 
@@ -113,6 +114,18 @@ class ScreenlyClient {
                     val visible = bb.get().toInt() == 1
                     val ts = bb.long
                     _events.tryEmit(ServerEvent.CursorPos(x, y, visible, ts))
+                }
+            }
+            Protocol.CURSOR_SHAPE -> {
+                if (payload.size >= 16) {
+                    val bb = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN)
+                    val w = bb.int
+                    val h = bb.int
+                    val hx = bb.int
+                    val hy = bb.int
+                    val png = ByteArray(bb.remaining())
+                    bb.get(png)
+                    _events.tryEmit(ServerEvent.CursorShape(w, h, hx, hy, png))
                 }
             }
         }

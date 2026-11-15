@@ -107,25 +107,7 @@ public sealed class DxgiCapture : ICapture
             SelectObject(hdcMem, hBmp);
             BitBlt(hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
 
-            // Composite cursor (native Windows cursor design)
-            var ci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
-            if (GetCursorInfo(ref ci) && (ci.flags & CURSOR_SHOWING) != 0 && ci.hCursor != IntPtr.Zero)
-            {
-                int cx = ci.ptScreenPos.x - _monitorX;
-                int cy = ci.ptScreenPos.y - _monitorY;
-                if (cx >= -32 && cy >= -32 && cx < _width + 32 && cy < _height + 32)
-                {
-                    // Use GetIconInfo to obtain native hotspot and free bitmap handles
-                    var ii = new ICONINFO();
-                    if (GetIconInfo(ci.hCursor, out ii))
-                    {
-                        if (ii.hbmMask != IntPtr.Zero) DeleteObject(ii.hbmMask);
-                        if (ii.hbmColor != IntPtr.Zero) DeleteObject(ii.hbmColor);
-                    }
-                    // DrawIconEx with cursor handle uses hotspot as origin → pass (cx, cy) directly
-                    DrawIconEx(hdcMem, cx, cy, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
-                }
-            }
+            // Cursor is now sent separately via CursorShape/CursorPos messages (not composited into frame)
 
             var data = new byte[_width * _height * 4];
             Marshal.Copy(bits, data, 0, data.Length);

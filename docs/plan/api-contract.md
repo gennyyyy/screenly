@@ -19,6 +19,7 @@ Max message size: 4 MiB (video frames must fit; 1080p keyframe ~200KB typical).
 | 0x09 | DISCONNECT | both | Graceful close |
 | 0x0A | ERROR | both | Error report |
 | 0x0B | CURSOR_POS | S→C | Cursor position update (separate from video frames) |
+| 0x0C | CURSOR_SHAPE | S→C | Cursor shape image (PNG, sent only on change) |
 
 ## HELLO (C→S)
 ```json
@@ -64,6 +65,17 @@ Binary payload (not JSON):
 ```
 Sent at ~30 Hz (or with each frame). Client renders cursor as overlay on top of video.
 Coordinates are in the same space as VIDEO_FRAME dimensions.
+
+## CURSOR_SHAPE (S→C)
+Binary payload (not JSON):
+```
+[4 bytes: width (int32)]     // cursor image width in pixels
+[4 bytes: height (int32)]    // cursor image height in pixels
+[4 bytes: hotspotX (int32)]  // hotspot x offset within cursor image
+[4 bytes: hotspotY (int32)]  // hotspot y offset within cursor image
+[N bytes: PNG data]          // transparent 32-bit PNG of the cursor
+```
+Sent only when cursor shape changes (on connect, reconnect, or cursor handle change). Client decodes and caches the PNG, then draws it as overlay at the CursorPos location (offset by hotspot). If no CursorShape received or decode fails, yellow marker fallback is used.
 
 ## INPUT_TOUCH (C→S)
 ```json
