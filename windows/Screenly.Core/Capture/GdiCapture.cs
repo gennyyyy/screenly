@@ -97,7 +97,6 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
     private int _monitorX;
     private int _monitorY;
     private bool _running;
-    private bool _dbgSave;
     public int MonitorX => _monitorX;
     public int MonitorY => _monitorY;
     public int Width => _width;
@@ -189,7 +188,6 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
             if (createdDC) ReleaseDC(IntPtr.Zero, hdcSrc);
 
             frame = new CapturedFrame(ms.ToArray(), _width, _height, (ulong)DateTime.UtcNow.Ticks);
-            if (!_dbgSave) { _dbgSave = true; try { File.WriteAllBytes("C:\\\\Users\\\\genny_\\\\AppData\\\\Local\\\\Temp\\\\opencode\\\\cursor-frame.jpg", ms.ToArray()); } catch { } }
             return true;
         }
         catch { return false; }
