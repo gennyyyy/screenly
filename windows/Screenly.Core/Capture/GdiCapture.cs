@@ -133,7 +133,6 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
                 {
                     _width = GetDeviceCaps(_hdcSrc, HORZRES);
                     _height = GetDeviceCaps(_hdcSrc, VERTRES);
-                    Console.WriteLine($"[GdiCapture] GetDeviceCaps fallback: {_width}x{_height}");
                 }
                 if (_width <= 0) _width = 1920;
                 if (_height <= 0) _height = 1080;
