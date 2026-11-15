@@ -2,7 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Screenly.Core.Capture;
 using Screenly.Core.Config;
-using Screenly.Core.Discovery;
+// USB-only: no mDNS discovery
 using Screenly.Core.Display;
 using Screenly.Core.Streaming;
 
@@ -31,8 +31,6 @@ public static class Program
         capture.Start(0);
         Console.WriteLine($"Capturing display at origin ({capture.MonitorX}, {capture.MonitorY}), size {capture.Width}x{capture.Height}");
 
-        using var mdns = new MdnsBroadcaster(cfg.Port);
-        mdns.Start();
 
         var server = new StreamServer(cfg.Port);
         server.ClientConnected += s => Console.WriteLine($"Client connected: {s.Id}");

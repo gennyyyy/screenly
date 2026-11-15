@@ -17,8 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.screenly.discovery.Host
-import com.screenly.discovery.discoverHosts
+// USB-only: no mDNS discovery
 import com.screenly.net.ClientMsg
 import com.screenly.net.Hello
 import com.screenly.net.ScreenlyClient
@@ -41,8 +40,7 @@ fun ScreenlyApp(activity: Activity) {
     val scope = rememberCoroutineScope()
     val client = remember { ScreenlyClient() }
     val prefs = activity.getSharedPreferences("screenly", android.content.Context.MODE_PRIVATE)
-    var lastHost by remember { mutableStateOf(prefs.getString("lastHost", null)) }
-    var hosts by remember { mutableStateOf(listOf<Host>()) }
+    var lastHost by remember { mutableStateOf(prefs.getString("lastHost", "127.0.0.1")) }
     var connected by remember { mutableStateOf(false) }
     var streamW by remember { mutableIntStateOf(1920) }
     var streamH by remember { mutableIntStateOf(1080) }
@@ -51,7 +49,16 @@ fun ScreenlyApp(activity: Activity) {
     DisposableEffect(Unit) { onDispose { decoder.release() } }
 
     LaunchedEffect(Unit) {
-        launch { discoverHosts(activity).collect { hosts = it } }
+        // USB-only: auto-connect to localhost (adb reverse tcp:7543 tcp:7543)
+        launch {
+            kotlinx.coroutines.delay(500)
+            val host = lastHost ?: "127.0.0.1"
+            if (client.connect(host, 7543)) {
+                prefs.edit().putString("lastHost", host).apply()
+                val dm = activity.resources.displayMetrics
+                client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = dm.widthPixels, screenHeight = dm.heightPixels, densityDpi = dm.densityDpi))
+            }
+        }
         launch {
             client.events.collect { ev ->
                 when (ev) {
@@ -95,22 +102,13 @@ fun ScreenlyApp(activity: Activity) {
             Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()).imePadding()) {
                 Text("Screenly", style = MaterialTheme.typography.headlineMedium)
                 Spacer(Modifier.height(8.dp))
-                hosts.forEach { h ->
-                    Button(onClick = {
-                        scope.launch {
-                            if (client.connect(h.host, h.port)) {
-                                prefs.edit().putString("lastHost", h.host).apply()
-                                lastHost = h.host
-                                val dm = activity.resources.displayMetrics
-                                client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = dm.widthPixels, screenHeight = dm.heightPixels, densityDpi = dm.densityDpi))
-                            }
-                        }
-                    }, Modifier.fillMaxWidth()) { Text("${h.name} (${h.host})") }
-                }
-                if (hosts.isEmpty()) Text("Searching for hosts on LAN… (or enter IP below)")
+                Text("USB mode: connect phone to PC via USB, then run on PC:")
+                Text("adb reverse tcp:7543 tcp:7543", style = MaterialTheme.typography.bodySmall)
                 Spacer(Modifier.height(12.dp))
-                var ip by remember { mutableStateOf("") }
-                OutlinedTextField(value = ip, onValueChange = { ip = it }, label = { Text("Manual host IP") }, modifier = Modifier.fillMaxWidth())
+                Text("Connecting to ${lastHost ?: "127.0.0.1"}…")
+                Spacer(Modifier.height(12.dp))
+                var ip by remember { mutableStateOf(lastHost ?: "127.0.0.1") }
+                OutlinedTextField(value = ip, onValueChange = { ip = it }, label = { Text("Host IP (USB: 127.0.0.1)") }, modifier = Modifier.fillMaxWidth())
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = {
                     if (ip.isNotBlank()) scope.launch {
