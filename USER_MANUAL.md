@@ -20,7 +20,7 @@ Screenly turns an Android device into a **second (extended) display** for a Wind
 1. Run **`Screenly-Setup.exe`** as Administrator.
 2. Follow the installer. It will:
    - Install `Screenly.Engine.exe` and `Screenly.Host.exe`
-   - Install the **Parsec Virtual Display Driver** (required for the extended display)
+   - Install the **virtual display driver** (bundled — no separate Parsec install needed)
    - Add a Windows Firewall rule for port **7543**
 3. When finished, launch **Screenly** from the Start Menu (or run `Screenly.Host.exe`).
 
@@ -50,11 +50,9 @@ The engine runs in the background (system tray). You can close the host window �
 
 ### USB connection (only mode)
 1. Plug the phone into the PC via USB with **USB debugging** enabled.
-2. On the PC, open a terminal and run:
-   ```
-   adb reverse tcp:7543 tcp:7543
-   ```
-3. On the phone, enter `127.0.0.1` in **Manual host IP** and tap Connect.
+2. Run the Screenly desktop app (`Screenly.Host.exe` or `Screenly.Engine.exe`) — it auto-configures the USB tunnel if `adb` is available.
+3. Open the Screenly app on the phone — it auto-connects to the PC.
+   - If it doesn't connect, run `adb reverse tcp:7543 tcp:7543` once on the PC, then enter `127.0.0.1` in **Host IP** and tap Connect.
 
 > **Tip:** If the Connect button is hidden by the keyboard, press **Back** first to dismiss the keyboard, then tap Connect.
 

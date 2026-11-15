@@ -70,6 +70,21 @@ public static class Program
         };
         server.Start();
         Console.WriteLine($"listening on port {cfg.Port}");
+        // Auto-set up USB reverse tunnel if adb is available (so Android connects over USB with no manual step)
+        try
+        {
+            var adb = FindAdb();
+            if (adb != null)
+            {
+                var psi = new System.Diagnostics.ProcessStartInfo(adb, "reverse tcp:7543 tcp:7543") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardError = true };
+                using var proc = System.Diagnostics.Process.Start(psi);
+                proc?.WaitForExit(5000);
+                var err = proc?.StandardError.ReadToEnd();
+                if (!string.IsNullOrWhiteSpace(err)) Console.WriteLine($"adb: {err.Trim()}");
+                else Console.WriteLine("adb reverse tcp:7543 tcp:7543 configured");
+            }
+        }
+        catch { }
 
         // Capture + stream loop (~15 fps)
         uint seq = 0;
@@ -95,6 +110,22 @@ public static class Program
         }, cts.Token);
 
         try { await loop; } catch (OperationCanceledException) { }
+
+    static string? FindAdb()
+    {
+        // Check PATH
+        try
+        {
+            var psi = new System.Diagnostics.ProcessStartInfo("where", "adb") { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
+            using var p = System.Diagnostics.Process.Start(psi);
+            if (p != null) { p.WaitForExit(3000); var line = p.StandardOutput.ReadLine(); if (!string.IsNullOrWhiteSpace(line) && System.IO.File.Exists(line.Trim())) return line.Trim(); }
+        }
+        catch { }
+        // Common SDK location
+        var common = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Android", "Sdk", "platform-tools", "adb.exe");
+        if (System.IO.File.Exists(common)) return common;
+        return null;
+    }
 
         capture.Stop();
         capture.Dispose();
