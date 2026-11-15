@@ -47,13 +47,19 @@ fun ScreenlyApp(activity: Activity) {
     DisposableEffect(Unit) { onDispose { decoder.release() } }
 
     LaunchedEffect(Unit) {
-        // USB-only: auto-connect to localhost (adb reverse tcp:7543 tcp:7543)
+        // USB-only: auto-connect to localhost with auto-reconnect
         launch {
-            kotlinx.coroutines.delay(500)
-            val host = "127.0.0.1"
-            if (client.connect(host, 7543)) {
-                val dm = activity.resources.displayMetrics
-                client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = dm.widthPixels, screenHeight = dm.heightPixels, densityDpi = dm.densityDpi))
+            while (true) {
+                if (!connected) {
+                    kotlinx.coroutines.delay(2000)
+                    val host = "127.0.0.1"
+                    if (client.connect(host, 7543)) {
+                        val dm = activity.resources.displayMetrics
+                        client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = dm.widthPixels, screenHeight = dm.heightPixels, densityDpi = dm.densityDpi))
+                    }
+                } else {
+                    kotlinx.coroutines.delay(1000)
+                }
             }
         }
         launch {

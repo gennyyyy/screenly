@@ -28,6 +28,7 @@ class ScreenlyClient {
     val events: SharedFlow<ServerEvent> = _events
 
     suspend fun connect(host: String, port: Int): Boolean = withContext(Dispatchers.IO) {
+        close()
         try {
             val s = Socket()
             s.tcpNoDelay = true
@@ -116,7 +117,6 @@ class ScreenlyClient {
     }
 
     fun close() {
-        scope.cancel()
         try { input?.close() } catch (_: Exception) { }
         try { output?.close() } catch (_: Exception) { }
         try { socket?.close() } catch (_: Exception) { }
