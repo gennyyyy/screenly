@@ -66,6 +66,12 @@ public static class DisplayHelper
 
 public static class Program
 {
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CURSORINFO { public int cbSize; public int flags; public IntPtr hCursor; public POINT ptScreenPos; }
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int x; public int y; }
+    private const int CURSOR_SHOWING = 0x00000001;
+    [DllImport("user32.dll")] private static extern bool GetCursorInfo(ref CURSORINFO pci);
     [DllImport("user32.dll")] private static extern int SetDisplayConfig(uint numPathArrayElements, IntPtr pathArray, uint numModeArrayElements, IntPtr modeArray, uint flags);
     private const uint SDC_TOPOLOGY_EXTEND = 0x00000004;
     private const uint SDC_APPLY = 0x00000080;
@@ -169,6 +175,35 @@ public static class Program
         uint seq = 0;
         var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+        // Cursor tracking loop (~30 Hz) - sends cursor position separately
+        _ = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                try
+                {
+                    var ci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
+                    if (GetCursorInfo(ref ci) && (ci.flags & CURSOR_SHOWING) != 0)
+                    {
+                        int cx = ci.ptScreenPos.x - capture.MonitorX;
+                        int cy = ci.ptScreenPos.y - capture.MonitorY;
+                        bool visible = cx >= 0 && cy >= 0 && cx < capture.Width && cy < capture.Height;
+                        var payload = new byte[17];
+                        BitConverter.TryWriteBytes(payload.AsSpan(0), cx);
+                        BitConverter.TryWriteBytes(payload.AsSpan(4), cy);
+                        payload[8] = visible ? (byte)1 : (byte)0;
+                        BitConverter.TryWriteBytes(payload.AsSpan(9), (ulong)DateTime.UtcNow.Ticks);
+                        foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
+                        {
+                            try { await s.SendAsync(MessageType.CursorPos, payload, cts.Token); }
+                            catch { }
+                        }
+                    }
+                }
+                catch { }
+                await Task.Delay(33, cts.Token);
+            }
+        }, cts.Token);
         var loop = Task.Run(async () =>
         {
             while (!cts.IsCancellationRequested)

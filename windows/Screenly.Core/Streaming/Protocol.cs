@@ -12,6 +12,7 @@ public enum MessageType : byte
     Pong = 0x08,
     Disconnect = 0x09,
     Error = 0x0A,
+    CursorPos = 0x0B,
 }
 
 public static class Protocol

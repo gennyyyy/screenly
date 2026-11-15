@@ -15,6 +15,7 @@ sealed interface ServerEvent {
     data class Configured(val c: ConfigMsg) : ServerEvent
     data class Errored(val e: ErrorMsg) : ServerEvent
     data object Ponged : ServerEvent
+    data class CursorPos(val x: Int, val y: Int, val visible: Boolean, val tsUs: Long) : ServerEvent
     data object Disconnected : ServerEvent
 }
 
@@ -92,6 +93,16 @@ class ScreenlyClient {
                 _events.tryEmit(ServerEvent.Errored(e))
             }
             Protocol.PONG -> _events.tryEmit(ServerEvent.Ponged)
+            Protocol.CURSOR_POS -> {
+                if (payload.size >= 17) {
+                    val bb = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN)
+                    val x = bb.int
+                    val y = bb.int
+                    val visible = bb.get().toInt() == 1
+                    val ts = bb.long
+                    _events.tryEmit(ServerEvent.CursorPos(x, y, visible, ts))
+                }
+            }
         }
     }
 

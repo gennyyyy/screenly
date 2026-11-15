@@ -35,8 +35,11 @@ class MainActivity : ComponentActivity() {
 fun ScreenlyApp(activity: Activity) {
     val client = remember { ScreenlyClient() }
     var connected by remember { mutableStateOf(false) }
-    var streamW by remember { mutableIntStateOf(1280) }
-    var streamH by remember { mutableIntStateOf(720) }
+    var streamW by remember { mutableIntStateOf(1920) }
+    var streamH by remember { mutableIntStateOf(1080) }
+    var cursorX by remember { mutableIntStateOf(0) }
+    var cursorY by remember { mutableIntStateOf(0) }
+    var cursorVisible by remember { mutableStateOf(false) }
     val surfaceView = remember { SurfaceView(activity) }
     val decoder = remember { VideoDecoder(surfaceView.holder) }
     DisposableEffect(Unit) { onDispose { decoder.release() } }
@@ -73,7 +76,6 @@ fun ScreenlyApp(activity: Activity) {
                             if (bmp != null) {
                                 val canvas = try { surfaceView.holder.lockCanvas() } catch (_: Exception) { null }
                                 if (canvas != null) {
-                                    // Maintain aspect ratio (letterbox) to avoid cursor position distortion
                                     val vw = surfaceView.width.coerceAtLeast(1)
                                     val vh = surfaceView.height.coerceAtLeast(1)
                                     val bw = bmp.width
@@ -85,6 +87,16 @@ fun ScreenlyApp(activity: Activity) {
                                     val dy = (vh - dh) / 2
                                     canvas.drawColor(android.graphics.Color.BLACK)
                                     canvas.drawBitmap(bmp, null, android.graphics.Rect(dx, dy, dx + dw, dy + dh), null)
+                                    // Draw cursor overlay if visible
+                                    if (cursorVisible) {
+                                        val cx = dx + (cursorX * scale).toInt()
+                                        val cy = dy + (cursorY * scale).toInt()
+                                        val paint = android.graphics.Paint().apply { color = android.graphics.Color.YELLOW; style = android.graphics.Paint.Style.FILL }
+                                        canvas.drawCircle(cx.toFloat(), cy.toFloat(), 12f, paint)
+                                        val crossPaint = android.graphics.Paint().apply { color = android.graphics.Color.RED; strokeWidth = 3f }
+                                        canvas.drawLine((cx - 15).toFloat(), cy.toFloat(), (cx + 15).toFloat(), cy.toFloat(), crossPaint)
+                                        canvas.drawLine(cx.toFloat(), (cy - 15).toFloat(), cx.toFloat(), (cy + 15).toFloat(), crossPaint)
+                                    }
                                     surfaceView.holder.unlockCanvasAndPost(canvas)
                                 }
                                 bmp.recycle()
@@ -93,6 +105,11 @@ fun ScreenlyApp(activity: Activity) {
                             decoder.configure(ev.w, ev.h)
                             decoder.decode(ev.nal, ev.tsUs, ev.keyframe)
                         }
+                    }
+                    is ServerEvent.CursorPos -> {
+                        cursorX = ev.x
+                        cursorY = ev.y
+                        cursorVisible = ev.visible
                     }
                     is ServerEvent.Disconnected -> {
                         connected = false

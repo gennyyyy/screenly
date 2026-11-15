@@ -38,4 +38,5 @@ object Protocol {
     const val PONG: Byte = 0x08
     const val DISCONNECT: Byte = 0x09
     const val ERROR: Byte = 0x0A
+    const val CURSOR_POS: Byte = 0x0B
 }

@@ -14,7 +14,7 @@ public interface ICapture : IDisposable
     void Stop();
 }
 
-public sealed class GdiCapture : ICapture
+public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
 {
     [DllImport("gdi32.dll", CharSet = CharSet.Auto)] private static extern IntPtr CreateDC(string lpszDriver, string? lpszDevice, string? lpszOutput, IntPtr lpInitData);
     [DllImport("gdi32.dll")] private static extern bool BitBlt(IntPtr hdcDest, int x, int y, int cx, int cy, IntPtr hdcSrc, int x1, int y1, int rop);
@@ -93,6 +93,7 @@ public sealed class GdiCapture : ICapture
     private int _monitorX;
     private int _monitorY;
     private bool _running;
+    private bool _dbgSave;
     public int MonitorX => _monitorX;
     public int MonitorY => _monitorY;
     public int Width => _width;
@@ -149,6 +150,7 @@ public sealed class GdiCapture : ICapture
         if (!_running) return false;
         try
         {
+            int _testMarker = 42; // TEST_MARKER_12345
             IntPtr hdcSrc;
             bool createdDC = false;
             if (_hdcSrc != IntPtr.Zero) hdcSrc = _hdcSrc;
@@ -159,28 +161,7 @@ public sealed class GdiCapture : ICapture
             SelectObject(hdcMem, hBitmap);
             BitBlt(hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
 
-            // Composite cursor: yellow backing + native cursor outline
-            var ci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
-            bool ciOk = GetCursorInfo(ref ci);
-            if (ciOk && (ci.flags & CURSOR_SHOWING) != 0 && ci.hCursor != IntPtr.Zero)
-            {
-                int cx = ci.ptScreenPos.x - _monitorX;
-                int cy = ci.ptScreenPos.y - _monitorY;
-                if (cx >= -32 && cy >= -32 && cx < _width + 32 && cy < _height + 32)
-                {
-                    // Draw a red cross at the cursor hotspot position for debugging
-                    IntPtr redPen = CreatePen(0, 3, 0x000000FF);
-                    IntPtr oldPen = SelectObject(hdcMem, redPen);
-                    MoveToEx(hdcMem, cx - 20, cy, IntPtr.Zero);
-                    LineTo(hdcMem, cx + 20, cy);
-                    MoveToEx(hdcMem, cx, cy - 20, IntPtr.Zero);
-                    LineTo(hdcMem, cx, cy + 20);
-                    SelectObject(hdcMem, oldPen);
-                    DeleteObject(redPen);
-                    // Also draw the cursor
-                    DrawIconEx(hdcMem, cx, cy, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
-                }
-            }
+            // Cursor is now sent separately via CursorPos message (not composited into frame)
 
             using var bmp = Image.FromHbitmap(hBitmap);
             using var ms = new MemoryStream();
@@ -194,6 +175,7 @@ public sealed class GdiCapture : ICapture
             if (createdDC) ReleaseDC(IntPtr.Zero, hdcSrc);
 
             frame = new CapturedFrame(ms.ToArray(), _width, _height, (ulong)DateTime.UtcNow.Ticks);
+            if (!_dbgSave) { _dbgSave = true; try { File.WriteAllBytes("C:\\\\Users\\\\genny_\\\\AppData\\\\Local\\\\Temp\\\\opencode\\\\cursor-frame.jpg", ms.ToArray()); } catch { } }
             return true;
         }
         catch { return false; }

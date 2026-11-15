@@ -18,6 +18,7 @@ Max message size: 4 MiB (video frames must fit; 1080p keyframe ~200KB typical).
 | 0x08 | PONG | both | Keepalive reply |
 | 0x09 | DISCONNECT | both | Graceful close |
 | 0x0A | ERROR | both | Error report |
+| 0x0B | CURSOR_POS | S→C | Cursor position update (separate from video frames) |
 
 ## HELLO (C→S)
 ```json
@@ -48,6 +49,17 @@ Binary payload (not JSON):
 [1 byte: flags]   // bit0 = keyframe (IDR)
 [N bytes: H.264 Annex B NAL units]
 ```
+
+## CURSOR_POS (S→C)
+Binary payload (not JSON):
+```
+[4 bytes: x (int32)]        // cursor x in stream/display coordinates (0..width)
+[4 bytes: y (int32)]        // cursor y in stream/display coordinates (0..height)
+[1 byte: visible (0/1)]     // 1 = cursor visible on this display, 0 = hidden/outside
+[8 bytes: timestamp_us (uint64)]  // capture timestamp for sync with video frame
+```
+Sent at ~30 Hz (or with each frame). Client renders cursor as overlay on top of video.
+Coordinates are in the same space as VIDEO_FRAME dimensions.
 
 ## INPUT_TOUCH (C→S)
 ```json
