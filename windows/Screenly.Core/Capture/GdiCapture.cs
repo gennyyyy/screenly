@@ -171,6 +171,14 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
                 int cy = ci.ptScreenPos.y - _monitorY;
                 if (cx >= -32 && cy >= -32 && cx < _width + 32 && cy < _height + 32)
                 {
+                    // Use GetIconInfo to obtain native hotspot and free bitmap handles
+                    var ii = new ICONINFO();
+                    if (GetIconInfo(ci.hCursor, out ii))
+                    {
+                        // Free bitmap handles returned by GetIconInfo
+                        if (ii.hbmMask != IntPtr.Zero) DeleteObject(ii.hbmMask);
+                        if (ii.hbmColor != IntPtr.Zero) DeleteObject(ii.hbmColor);
+                    }
                     // DrawIconEx with cursor handle uses hotspot as origin → pass (cx, cy) directly
                     DrawIconEx(hdcMem, cx, cy, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
                 }

@@ -17,6 +17,7 @@ public sealed class DxgiCapture : ICapture
     [DllImport("user32.dll", CharSet = CharSet.Auto)] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
     [DllImport("user32.dll", CharSet = CharSet.Auto)] private static extern bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
     [DllImport("user32.dll")] private static extern bool GetCursorInfo(ref CURSORINFO pci);
+    [DllImport("user32.dll")] private static extern bool GetIconInfo(IntPtr hIcon, out ICONINFO piconinfo);
     [DllImport("user32.dll")] private static extern bool DrawIconEx(IntPtr hdc, int xLeft, int yTop, IntPtr hIcon, int cxWidth, int cyHeight, uint istepIfAniCur, IntPtr hbrFlickerFreeDraw, uint diFlags);
     [DllImport("user32.dll", CharSet = CharSet.Ansi)] private static extern bool EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
 
@@ -25,6 +26,7 @@ public sealed class DxgiCapture : ICapture
     [StructLayout(LayoutKind.Sequential)] private struct RECT { public int left, top, right, bottom; }
     [StructLayout(LayoutKind.Sequential)] private struct CURSORINFO { public int cbSize; public int flags; public IntPtr hCursor; public POINT ptScreenPos; }
     [StructLayout(LayoutKind.Sequential)] private struct POINT { public int x; public int y; }
+    [StructLayout(LayoutKind.Sequential)] private struct ICONINFO { public bool fIcon; public int xHotspot; public int yHotspot; public IntPtr hbmMask; public IntPtr hbmColor; }
     private const int CURSOR_SHOWING = 0x00000001;
     private const uint DI_NORMAL = 0x0003;
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)] private struct MONITORINFOEX { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice; }
@@ -113,6 +115,14 @@ public sealed class DxgiCapture : ICapture
                 int cy = ci.ptScreenPos.y - _monitorY;
                 if (cx >= -32 && cy >= -32 && cx < _width + 32 && cy < _height + 32)
                 {
+                    // Use GetIconInfo to obtain native hotspot and free bitmap handles
+                    var ii = new ICONINFO();
+                    if (GetIconInfo(ci.hCursor, out ii))
+                    {
+                        if (ii.hbmMask != IntPtr.Zero) DeleteObject(ii.hbmMask);
+                        if (ii.hbmColor != IntPtr.Zero) DeleteObject(ii.hbmColor);
+                    }
+                    // DrawIconEx with cursor handle uses hotspot as origin → pass (cx, cy) directly
                     DrawIconEx(hdcMem, cx, cy, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
                 }
             }
