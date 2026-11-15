@@ -98,6 +98,8 @@ Config is stored in `%APPDATA%\Screenly\config.json`.
 | Black screen on phone | The engine may still be starting. Wait 5 seconds and reconnect. |
 | Cursor not visible | Ensure you're running the latest engine build. |
 | Virtual display not created | Run `Screenly.Engine.exe` as Administrator once, or install the Parsec VDD driver manually from `C:\Program Files\Parsec Virtual Display Driver`. |
+| 12 displays shown in Settings | Ghost displays from previous runs; reboot the PC to clear them. |
+| Second screen mirrors primary | Engine now forces Extend mode; if still mirroring, set the virtual display to "Extend" in Display Settings. |
 | Engine won't start | Check that port 7543 isn't in use by another app. |
 | App crashes on connect | Ensure Android 8.0+ and sufficient free RAM. |
 
