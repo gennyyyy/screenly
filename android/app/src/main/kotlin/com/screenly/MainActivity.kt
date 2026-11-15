@@ -41,9 +41,7 @@ fun ScreenlyApp(activity: Activity) {
     var connected by remember { mutableStateOf(false) }
     var streamW by remember { mutableIntStateOf(1920) }
     var streamH by remember { mutableIntStateOf(1080) }
-    var cursorX by remember { mutableIntStateOf(0) }
-    var cursorY by remember { mutableIntStateOf(0) }
-    var cursorVisible by remember { mutableStateOf(false) }
+    // Cursor is now composited into the video frame on Windows side (no separate overlay)
     val surfaceView = remember { SurfaceView(activity) }
     val decoder = remember { VideoDecoder(surfaceView.holder) }
     DisposableEffect(Unit) { onDispose { decoder.release() } }
@@ -92,15 +90,6 @@ fun ScreenlyApp(activity: Activity) {
                                     val content = DisplayGeometry.contentRect(vw, vh, bmp.width, bmp.height)
                                     canvas.drawColor(android.graphics.Color.BLACK)
                                     canvas.drawBitmap(bmp, null, android.graphics.RectF(content), null)
-                                    // Draw cursor overlay if visible
-                                    if (cursorVisible) {
-                                        val (cx, cy) = DisplayGeometry.streamToView(cursorX, cursorY, content, bmp.width, bmp.height)
-                                        val paint = android.graphics.Paint().apply { color = android.graphics.Color.YELLOW; style = android.graphics.Paint.Style.FILL }
-                                        canvas.drawCircle(cx, cy, 12f, paint)
-                                        val crossPaint = android.graphics.Paint().apply { color = android.graphics.Color.RED; strokeWidth = 3f }
-                                        canvas.drawLine(cx - 15f, cy, cx + 15f, cy, crossPaint)
-                                        canvas.drawLine(cx, cy - 15f, cx, cy + 15f, crossPaint)
-                                    }
                                     surfaceView.holder.unlockCanvasAndPost(canvas)
                                 }
                                 bmp.recycle()
@@ -111,15 +100,10 @@ fun ScreenlyApp(activity: Activity) {
                         }
                     }
                     is ServerEvent.CursorPos -> {
-                        cursorX = ev.x
-                        cursorY = ev.y
-                        cursorVisible = ev.visible
+                        // Cursor is composited into frames; ignore position updates
                     }
                     is ServerEvent.Disconnected -> {
                         connected = false
-                        cursorVisible = false
-                        cursorX = 0
-                        cursorY = 0
                         client.close()
                         activity.stopService(Intent(activity, ConnectionService::class.java))
                     }

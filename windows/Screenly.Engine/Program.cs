@@ -255,35 +255,6 @@ public static class Program
 
         // Capture + stream loop (~15 fps)
         uint seq = 0;
-        // Cursor tracking loop (~30 Hz) - sends cursor position separately
-        _ = Task.Run(async () =>
-        {
-            while (!cts.IsCancellationRequested)
-            {
-                try
-                {
-                    var ci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
-                    if (GetCursorInfo(ref ci))
-                    {
-                        int cx = ci.ptScreenPos.x - capture.MonitorX;
-                        int cy = ci.ptScreenPos.y - capture.MonitorY;
-                        bool visible = (ci.flags & CURSOR_SHOWING) != 0 && cx >= 0 && cy >= 0 && cx < capture.Width && cy < capture.Height;
-                        var payload = new byte[17];
-                        BitConverter.TryWriteBytes(payload.AsSpan(0), cx);
-                        BitConverter.TryWriteBytes(payload.AsSpan(4), cy);
-                        payload[8] = visible ? (byte)1 : (byte)0;
-                        BitConverter.TryWriteBytes(payload.AsSpan(9), (ulong)DateTime.UtcNow.Ticks);
-                        foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
-                        {
-                            try { await s.SendAsync(MessageType.CursorPos, payload, cts.Token); }
-                            catch { }
-                        }
-                    }
-                }
-                catch { }
-                await Task.Delay(33, cts.Token);
-            }
-        }, cts.Token);
         var loop = Task.Run(async () =>
         {
             while (!cts.IsCancellationRequested)

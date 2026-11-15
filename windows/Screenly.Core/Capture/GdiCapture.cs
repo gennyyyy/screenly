@@ -165,7 +165,18 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
             SelectObject(hdcMem, hBitmap);
             BitBlt(hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
 
-            // Cursor is now sent separately via CursorPos message (not composited into frame)
+            // Composite cursor into frame (native Windows cursor design)
+            var ci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
+            if (GetCursorInfo(ref ci) && (ci.flags & CURSOR_SHOWING) != 0 && ci.hCursor != IntPtr.Zero)
+            {
+                int cx = ci.ptScreenPos.x - _monitorX;
+                int cy = ci.ptScreenPos.y - _monitorY;
+                if (cx >= -32 && cy >= -32 && cx < _width + 32 && cy < _height + 32)
+                {
+                    // DrawIconEx with cursor handle uses hotspot as origin → pass (cx, cy) directly
+                    DrawIconEx(hdcMem, cx, cy, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
+                }
+            }
 
             using var bmp = Image.FromHbitmap(hBitmap);
             using var ms = new MemoryStream();
