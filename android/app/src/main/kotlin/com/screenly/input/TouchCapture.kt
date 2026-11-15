@@ -5,6 +5,7 @@ import com.screenly.net.ClientMsg
 import com.screenly.net.InputTouch
 import com.screenly.net.TouchEvt
 import com.screenly.net.ScreenlyClient
+import com.screenly.video.DisplayGeometry
 import kotlinx.coroutines.*
 
 class TouchCapture(private val client: ScreenlyClient, private val streamW: () -> Int, private val streamH: () -> Int) {
@@ -23,8 +24,9 @@ class TouchCapture(private val client: ScreenlyClient, private val streamW: () -
                 MotionEvent.ACTION_CANCEL -> "cancel"
                 else -> "move"
             }
-            val x = ev.getX(i) * sw / viewW
-            val y = ev.getY(i) * sh / viewH
+            val content = DisplayGeometry.contentRect(viewW, viewH, sw, sh)
+            val point = DisplayGeometry.viewToStream(ev.getX(i), ev.getY(i), content, sw, sh) ?: continue
+            val (x, y) = point
             events.add(TouchEvt(type, ev.getPointerId(i), x, y, ev.getPressure(i), System.nanoTime() / 1000))
         }
         scope.launch { client.send(InputTouch(events)) }

@@ -8,10 +8,13 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 // USB-only: no mDNS discovery
@@ -21,6 +24,7 @@ import com.screenly.net.ServerEvent
 import com.screenly.service.ConnectionService
 import com.screenly.input.TouchCapture
 import com.screenly.video.VideoDecoder
+import com.screenly.video.DisplayGeometry
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
@@ -78,24 +82,17 @@ fun ScreenlyApp(activity: Activity) {
                                 if (canvas != null) {
                                     val vw = surfaceView.width.coerceAtLeast(1)
                                     val vh = surfaceView.height.coerceAtLeast(1)
-                                    val bw = bmp.width
-                                    val bh = bmp.height
-                                    val scale = minOf(vw.toFloat() / bw, vh.toFloat() / bh)
-                                    val dw = (bw * scale).toInt()
-                                    val dh = (bh * scale).toInt()
-                                    val dx = (vw - dw) / 2
-                                    val dy = (vh - dh) / 2
+                                    val content = DisplayGeometry.contentRect(vw, vh, bmp.width, bmp.height)
                                     canvas.drawColor(android.graphics.Color.BLACK)
-                                    canvas.drawBitmap(bmp, null, android.graphics.Rect(dx, dy, dx + dw, dy + dh), null)
+                                    canvas.drawBitmap(bmp, null, android.graphics.RectF(content), null)
                                     // Draw cursor overlay if visible
                                     if (cursorVisible) {
-                                        val cx = dx + (cursorX * scale).toInt()
-                                        val cy = dy + (cursorY * scale).toInt()
+                                        val (cx, cy) = DisplayGeometry.streamToView(cursorX, cursorY, content, bmp.width, bmp.height)
                                         val paint = android.graphics.Paint().apply { color = android.graphics.Color.YELLOW; style = android.graphics.Paint.Style.FILL }
-                                        canvas.drawCircle(cx.toFloat(), cy.toFloat(), 12f, paint)
+                                        canvas.drawCircle(cx, cy, 12f, paint)
                                         val crossPaint = android.graphics.Paint().apply { color = android.graphics.Color.RED; strokeWidth = 3f }
-                                        canvas.drawLine((cx - 15).toFloat(), cy.toFloat(), (cx + 15).toFloat(), cy.toFloat(), crossPaint)
-                                        canvas.drawLine(cx.toFloat(), (cy - 15).toFloat(), cx.toFloat(), (cy + 15).toFloat(), crossPaint)
+                                        canvas.drawLine(cx - 15f, cy, cx + 15f, cy, crossPaint)
+                                        canvas.drawLine(cx, cy - 15f, cx, cy + 15f, crossPaint)
                                     }
                                     surfaceView.holder.unlockCanvasAndPost(canvas)
                                 }
@@ -123,12 +120,23 @@ fun ScreenlyApp(activity: Activity) {
     }
 
     MaterialTheme {
-        Box(Modifier.fillMaxSize()) {
+        BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
+            val sourceAspect = streamW.toFloat() / streamH.coerceAtLeast(1)
+            val containerAspect = maxWidth.value / maxHeight.value.coerceAtLeast(1f)
+            val videoWidth: androidx.compose.ui.unit.Dp
+            val videoHeight: androidx.compose.ui.unit.Dp
+            if (containerAspect > sourceAspect) {
+                videoHeight = maxHeight
+                videoWidth = maxHeight * sourceAspect
+            } else {
+                videoWidth = maxWidth
+                videoHeight = maxWidth / sourceAspect
+            }
             AndroidView(factory = { _ ->
                 val tc = TouchCapture(client, { streamW }, { streamH })
                 surfaceView.setOnTouchListener { _, ev -> tc.handle(ev, surfaceView.width, surfaceView.height); true }
                 surfaceView
-            }, modifier = Modifier.fillMaxSize())
+            }, modifier = Modifier.size(videoWidth, videoHeight).align(Alignment.Center))
             if (!connected) {
                 Column(Modifier.fillMaxSize().padding(16.dp)) {
                     Text("Screenly", style = MaterialTheme.typography.headlineMedium)

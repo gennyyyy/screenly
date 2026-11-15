@@ -96,9 +96,9 @@ public static class Program
                     mode.dmSize = (short)Marshal.SizeOf<DisplayHelper.DEVMODE>();
                     if (DisplayHelper.EnumDisplaySettings(devName, -1, ref mode))
                     {
-                        mode.dmPelsWidth = 1920;
-                        mode.dmPelsHeight = 1080;
-                        mode.dmDisplayFrequency = 60;
+                        mode.dmPelsWidth = cfg.VirtualDisplay.Width;
+                        mode.dmPelsHeight = cfg.VirtualDisplay.Height;
+                        mode.dmDisplayFrequency = cfg.VirtualDisplay.RefreshHz;
                         mode.dmFields = 0x80000 | 0x100000 | 0x400000;
                         int rc = DisplayHelper.ChangeDisplaySettingsEx(devName, ref mode, IntPtr.Zero, 0x1, IntPtr.Zero);
                         await Task.Delay(3000);
@@ -133,7 +133,7 @@ public static class Program
                 case MessageType.Hello:
                     Console.WriteLine("HELLO received");
                     session.HasHandshaked = true;
-                    var ack = new { status = "ok", sessionId = session.Id.ToString(), pairingToken = (string?)null, config = new { width = cfg.VirtualDisplay.Width, height = cfg.VirtualDisplay.Height, fps = cfg.VirtualDisplay.RefreshHz, bitrateKbps = cfg.Encoding.BitrateKbps } };
+                    var ack = new { status = "ok", sessionId = session.Id.ToString(), pairingToken = (string?)null, config = new { width = capture.Width, height = capture.Height, fps = cfg.VirtualDisplay.RefreshHz, bitrateKbps = cfg.Encoding.BitrateKbps } };
                     var ackJson = JsonSerializer.Serialize(ack);
                     await session.SendAsync(MessageType.HelloAck, Encoding.UTF8.GetBytes(ackJson));
                     Console.WriteLine("HELLO_ACK sent");
@@ -183,12 +183,11 @@ public static class Program
                 try
                 {
                     var ci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
-                    if (GetCursorInfo(ref ci) && (ci.flags & CURSOR_SHOWING) != 0)
+                    if (GetCursorInfo(ref ci))
                     {
                         int cx = ci.ptScreenPos.x - capture.MonitorX;
                         int cy = ci.ptScreenPos.y - capture.MonitorY;
-                        bool visible = cx >= 0 && cy >= 0 && cx < capture.Width && cy < capture.Height;
-                        Console.WriteLine($"CURSOR_POS: x={cx} y={cy} visible={visible} display={capture.Width}x{capture.Height}");
+                        bool visible = (ci.flags & CURSOR_SHOWING) != 0 && cx >= 0 && cy >= 0 && cx < capture.Width && cy < capture.Height;
                         var payload = new byte[17];
                         BitConverter.TryWriteBytes(payload.AsSpan(0), cx);
                         BitConverter.TryWriteBytes(payload.AsSpan(4), cy);
