@@ -188,6 +188,7 @@ public static class Program
                         int cx = ci.ptScreenPos.x - capture.MonitorX;
                         int cy = ci.ptScreenPos.y - capture.MonitorY;
                         bool visible = cx >= 0 && cy >= 0 && cx < capture.Width && cy < capture.Height;
+                        Console.WriteLine($"CURSOR_POS: x={cx} y={cy} visible={visible} display={capture.Width}x{capture.Height}");
                         var payload = new byte[17];
                         BitConverter.TryWriteBytes(payload.AsSpan(0), cx);
                         BitConverter.TryWriteBytes(payload.AsSpan(4), cy);
