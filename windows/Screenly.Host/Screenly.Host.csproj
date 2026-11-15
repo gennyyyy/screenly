@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Screenly.Host</RootNamespace>
     <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Screenly.Core\Screenly.Core.csproj" />
