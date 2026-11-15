@@ -162,22 +162,16 @@ public sealed class GdiCapture : ICapture
             {
                 int cx = ci.ptScreenPos.x - _monitorX;
                 int cy = ci.ptScreenPos.y - _monitorY;
-                double scaleX = (double)_encW / _width;
-                double scaleY = (double)_encH / _height;
-                int scx = (int)(cx * scaleX);
-                int scy = (int)(cy * scaleY);
                 if (cx >= -32 && cy >= -32 && cx < _width + 32 && cy < _height + 32)
                 {
-                    int hx = 0, hy = 0;
-                    var ii = new ICONINFO();
-                    if (GetIconInfo(ci.hCursor, out ii)) { hx = ii.xHotspot; hy = ii.yHotspot; if (ii.hbmMask != IntPtr.Zero) DeleteObject(ii.hbmMask); if (ii.hbmColor != IntPtr.Zero) DeleteObject(ii.hbmColor); }
-                    // Hotspot is in cursor-icon coords (not scaled); position is in encode coords
+                    // DrawIconEx with a cursor handle uses the hotspot as origin,
+                    // so pass the hotspot position (cx, cy) directly
                     IntPtr yelBrush = CreateSolidBrush(0x0000FFFF);
                     IntPtr oldBrush = SelectObject(hdcMem, yelBrush);
-                    Ellipse(hdcMem, scx - 14, scy - 14, scx + 14, scy + 14);
+                    Ellipse(hdcMem, cx - 14, cy - 14, cx + 14, cy + 14);
                     SelectObject(hdcMem, oldBrush);
                     DeleteObject(yelBrush);
-                    DrawIconEx(hdcMem, scx - hx, scy - hy, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
+                    DrawIconEx(hdcMem, cx, cy, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
                 }
             }
 
