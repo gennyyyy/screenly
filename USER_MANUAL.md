@@ -48,17 +48,7 @@ The engine runs in the background (system tray). You can close the host window �
 
 ## 4. Connect
 
-### Option A — Auto-discovery (Wi-Fi)
-1. Make sure the phone and PC are on the **same Wi-Fi network**.
-2. Open Screenly on the phone.
-3. Within a few seconds the PC appears in the list — tap it to connect.
-
-### Option B — Manual IP (Wi-Fi)
-1. On the PC, note the **Host IP** shown in the Screenly host window.
-2. On the phone, type that IP into **Manual host IP**.
-3. Press **Back** to dismiss the keyboard, then tap **Connect to \<IP\>**.
-
-### Option C — USB (no Wi-Fi needed)
+### USB connection (only mode)
 1. Plug the phone into the PC via USB with **USB debugging** enabled.
 2. On the PC, open a terminal and run:
    ```
@@ -123,7 +113,7 @@ Config is stored in `%APPDATA%\Screenly\config.json`.
 ## 9. Known limitations
 
 - **Mirror vs. extend:** Screenly creates a real extended display, but capture is via GDI+JPEG (~5–6 fps at 1080p). DXGI + H.264 hardware encoding is planned for 60 fps.
-- **Wi-Fi required for wireless:** USB tethering or `adb reverse` works without Wi-Fi.
+- **USB only:** Wi-Fi/network discovery has been removed; connection is over USB via `adb reverse`.
 - **No audio:** Only video is streamed; PC audio stays on the PC.
 
 ---
