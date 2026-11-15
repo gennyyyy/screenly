@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Drawing.Imaging;
+using System.IO;
 using System.Runtime.InteropServices;
 
 namespace Screenly.Core.Capture;
@@ -34,6 +35,7 @@ public sealed class GdiCapture : ICapture
     [DllImport("user32.dll")] private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
     [DllImport("user32.dll", CharSet = CharSet.Auto)] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
     [DllImport("user32.dll", CharSet = CharSet.Auto)] private static extern bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
+    [DllImport("user32.dll", CharSet = CharSet.Ansi)] private static extern bool EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
     [DllImport("gdi32.dll")] private static extern IntPtr CreateSolidBrush(uint crColor);
     [DllImport("gdi32.dll")] private static extern bool Ellipse(IntPtr hdc, int left, int top, int right, int bottom);
 
@@ -48,6 +50,18 @@ public sealed class GdiCapture : ICapture
     [StructLayout(LayoutKind.Sequential)] private struct CURSORINFO { public int cbSize; public int flags; public IntPtr hCursor; public POINT ptScreenPos; }
     [StructLayout(LayoutKind.Sequential)] private struct POINT { public int x; public int y; }
     [StructLayout(LayoutKind.Sequential)] private struct ICONINFO { public bool fIcon; public int xHotspot; public int yHotspot; public IntPtr hbmMask; public IntPtr hbmColor; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)] private struct DEVMODE
+    {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+        public short dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+        public int dmFields;
+        public int dmPositionX, dmPositionY, dmDisplayOrientation, dmDisplayFixedOutput;
+        public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+        public short dmLogPixels;
+        public int dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+        public int dmICMMethod, dmICMIntent, dmMediaType, dmDitherType, dmReserved1, dmReserved2, dmPanningWidth, dmPanningHeight;
+    }
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)] private struct DISPLAY_DEVICE
     {
         public int cb;
@@ -99,8 +113,20 @@ public sealed class GdiCapture : ICapture
             _hdcSrc = CreateDC(_deviceName, null, null, IntPtr.Zero);
             if (_hdcSrc != IntPtr.Zero)
             {
-                _width = GetDeviceCaps(_hdcSrc, HORZRES);
-                _height = GetDeviceCaps(_hdcSrc, VERTRES);
+                // Use EnumDisplaySettings to get the actual resolution (more reliable than GetDeviceCaps)
+                var dm = new DEVMODE();
+                dm.dmSize = (short)Marshal.SizeOf<DEVMODE>();
+                if (EnumDisplaySettings(_deviceName, -1, ref dm))
+                {
+                    _width = dm.dmPelsWidth;
+                    _height = dm.dmPelsHeight;
+                }
+                else
+                {
+                    _width = GetDeviceCaps(_hdcSrc, HORZRES);
+                    _height = GetDeviceCaps(_hdcSrc, VERTRES);
+                    Console.WriteLine($"[GdiCapture] GetDeviceCaps fallback: {_width}x{_height}");
+                }
                 if (_width <= 0) _width = 1920;
                 if (_height <= 0) _height = 1080;
                 EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, MonitorCallback, IntPtr.Zero);
@@ -185,6 +211,7 @@ public sealed class GdiCapture : ICapture
 
     public void Stop() => _running = false;
     public void Dispose() => Stop();
+
 
     public static string? FindVirtualDisplayDevicePublic() => FindVirtualDisplayDevice();
     private static string? FindVirtualDisplayDevice()

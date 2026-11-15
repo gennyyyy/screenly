@@ -16,35 +16,45 @@ public static class DisplayHelper
     public struct DEVMODE
     {
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
-        public ushort dmSpecVersion;
-        public ushort dmDriverVersion;
-        public ushort dmSize;
-        public ushort dmDriverExtra;
-        public uint dmFields;
-        public int dmOrientation;
-        public int dmPaperSize;
-        public int dmPaperLength;
-        public int dmPaperWidth;
-        public int dmScale;
-        public int dmCopies;
-        public int dmDefaultSource;
-        public int dmPrintQuality;
-        public int dmColor;
-        public int dmDuplex;
-        public int dmYResolution;
-        public int dmTTOption;
-        public int dmCollate;
+        public short dmSpecVersion;
+        public short dmDriverVersion;
+        public short dmSize;
+        public short dmDriverExtra;
+        public int dmFields;
+        public int dmPositionX;
+        public int dmPositionY;
+        public int dmDisplayOrientation;
+        public int dmDisplayFixedOutput;
+        public short dmColor;
+        public short dmDuplex;
+        public short dmYResolution;
+        public short dmTTOption;
+        public short dmCollate;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
-        public ushort dmLogPixels;
-        public uint dmBitsPerPel;
-        public uint dmPelsWidth;
-        public uint dmPelsHeight;
-        public uint dmDisplayFlags;
-        public uint dmDisplayFrequency;
+        public short dmLogPixels;
+        public int dmBitsPerPel;
+        public int dmPelsWidth;
+        public int dmPelsHeight;
+        public int dmDisplayFlags;
+        public int dmDisplayFrequency;
+        public int dmICMMethod;
+        public int dmICMIntent;
+        public int dmMediaType;
+        public int dmDitherType;
+        public int dmReserved1;
+        public int dmReserved2;
+        public int dmPanningWidth;
+        public int dmPanningHeight;
     }
 
     [DllImport("user32.dll", CharSet = CharSet.Ansi)]
     public static extern int ChangeDisplaySettingsEx(string lpszDeviceName, ref DEVMODE lpDevMode, IntPtr hwnd, uint dwflags, IntPtr lParam);
+    [DllImport("user32.dll", CharSet = CharSet.Ansi)]
+    public static extern bool EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
+    [DllImport("user32.dll")]
+    public static extern int GetDisplayConfigBufferSizes(uint flags, out uint numPathArrayElements, out uint numModeInfoArrayElements);
+    [DllImport("user32.dll")]
+    public static extern int QueryDisplayConfig(uint flags, ref uint numPathArrayElements, IntPtr pathArray, ref uint numModeInfoArrayElements, IntPtr modeInfoArray, IntPtr currentTopologyId);
 
     public const uint DM_PELSWIDTH = 0x00080000;
     public const uint DM_PELSHEIGHT = 0x00100000;
@@ -68,22 +78,29 @@ public static class Program
         {
             vddHandle = await display.CreateAsync(cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height, cfg.VirtualDisplay.RefreshHz);
             Console.WriteLine($"Virtual display created (handle {vddHandle.Id})");
-            // Give Windows a moment to register the new monitor
-            await Task.Delay(1500);
-            // Set resolution to 1280x720 (VDD default is 1920x1080)
+            // Give Windows a moment to register the new monitor and render to it
+            await Task.Delay(5000);
+            // Try to set resolution to 1920x1080
             try
             {
                 var devName = GdiCapture.FindVirtualDisplayDevicePublic();
                 if (devName != null)
                 {
-                    var dm = new DisplayHelper.DEVMODE();
-                    dm.dmSize = (ushort)Marshal.SizeOf<DisplayHelper.DEVMODE>();
-                    dm.dmPelsWidth = (uint)cfg.VirtualDisplay.Width;
-                    dm.dmPelsHeight = (uint)cfg.VirtualDisplay.Height;
-                    dm.dmDisplayFrequency = 60;
-                    dm.dmFields = DisplayHelper.DM_PELSWIDTH | DisplayHelper.DM_PELSHEIGHT | DisplayHelper.DM_DISPLAYFREQUENCY;
-                    var res = DisplayHelper.ChangeDisplaySettingsEx(devName, ref dm, IntPtr.Zero, DisplayHelper.CDS_UPDATEREGISTRY, IntPtr.Zero);
-                    Console.WriteLine($"SetMode {cfg.VirtualDisplay.Width}x{cfg.VirtualDisplay.Height}: {(res == 0 ? "OK" : $"err={res}")}");
+                    var mode = new DisplayHelper.DEVMODE();
+                    mode.dmSize = (short)Marshal.SizeOf<DisplayHelper.DEVMODE>();
+                    if (DisplayHelper.EnumDisplaySettings(devName, -1, ref mode))
+                    {
+                        mode.dmPelsWidth = 1920;
+                        mode.dmPelsHeight = 1080;
+                        mode.dmDisplayFrequency = 60;
+                        mode.dmFields = 0x80000 | 0x100000 | 0x400000;
+                        int rc = DisplayHelper.ChangeDisplaySettingsEx(devName, ref mode, IntPtr.Zero, 0x1, IntPtr.Zero);
+                        await Task.Delay(3000);
+                    }
+                    else
+                    {
+                        Console.WriteLine("EnumDisplaySettings failed");
+                    }
                 }
             }
             catch (Exception ex) { Console.WriteLine($"SetMode failed: {ex.Message}"); }

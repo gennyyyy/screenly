@@ -26,6 +26,11 @@ Source: "..\app\Screenly.Host.deps.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\app\Screenly.Host.runtimeconfig.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\driver\parsec-vdd\ParsecVDisplay-v0.45-setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
+[Registry]
+Root: HKLM; Subkey: "SOFTWARE\Parsec\vdd\0"; ValueType: dword; ValueName: "w"; ValueData: "1920"; Flags: createvalueifdoesntexist
+Root: HKLM; Subkey: "SOFTWARE\Parsec\vdd\0"; ValueType: dword; ValueName: "h"; ValueData: "1080"; Flags: createvalueifdoesntexist
+Root: HKLM; Subkey: "SOFTWARE\Parsec\vdd\0"; ValueType: dword; ValueName: "hz"; ValueData: "60"; Flags: createvalueifdoesntexist
+
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
 
@@ -34,6 +39,5 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
-Filename: "{tmp}\ParsecVDisplay-v0.45-setup.exe"; Parameters: "/S"; StatusMsg: "Installing virtual display driver..."; Flags: waituntilterminated
 Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""Screenly"" dir=in action=allow protocol=TCP localport=7543"; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch Screenly"; Flags: nowait postinstall skipifsilent

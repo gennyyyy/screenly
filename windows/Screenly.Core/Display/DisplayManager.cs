@@ -139,15 +139,18 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
             if (File.Exists(idxFile))
             {
                 var oldIdx = int.Parse(File.ReadAllText(idxFile).Trim());
+                // 16-bit big-endian index (per Parsec VDD protocol)
                 var buf = new byte[32];
-                BitConverter.GetBytes(oldIdx).CopyTo(buf, 1);
+                buf[0] = (byte)((oldIdx >> 8) & 0xFF);
+                buf[1] = (byte)(oldIdx & 0xFF);
                 IoControl(VDD_IOCTL_REMOVE, buf, null, 2000);
                 File.Delete(idxFile);
             }
         }
         catch { }
+        var inBuf = new byte[32];
         var outBuf = new byte[4];
-        if (!IoControl(VDD_IOCTL_ADD, new byte[32], outBuf, 5000))
+        if (!IoControl(VDD_IOCTL_ADD, inBuf, outBuf, 5000))
             throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
         int index = BitConverter.ToInt32(outBuf, 0);
         if (index < 0 || index > 15) throw new InvalidOperationException($"Invalid display index: {index}");
@@ -169,7 +172,9 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
     {
         if (!_displays.TryGetValue(handle.Id, out var index)) return Task.CompletedTask;
         var inBuf = new byte[32];
-        BitConverter.GetBytes(index).CopyTo(inBuf, 1); // monitor_index at [1..4]
+        // 16-bit big-endian index (per Parsec VDD protocol)
+        inBuf[0] = (byte)((index >> 8) & 0xFF);
+        inBuf[1] = (byte)(index & 0xFF);
         IoControl(VDD_IOCTL_REMOVE, inBuf, null, 1000);
         _displays.Remove(handle.Id);
         if (_displays.Count == 0) StopPing();

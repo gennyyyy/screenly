@@ -13,6 +13,6 @@ public sealed record AppConfig
     public bool FirewallRuleAdded { get; init; }
 }
 
-public sealed record VirtualDisplayConfig(int Width = 1280, int Height = 720, int RefreshHz = 30);
+public sealed record VirtualDisplayConfig(int Width = 1920, int Height = 1080, int RefreshHz = 60);
 public sealed record EncodingConfig(int BitrateKbps = 8000, int KeyframeIntervalSec = 2);
 public sealed record PairingConfig(bool PinEnabled = false, string? PinHash = null, string? Salt = null);
