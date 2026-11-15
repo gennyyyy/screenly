@@ -73,7 +73,18 @@ fun ScreenlyApp(activity: Activity) {
                             if (bmp != null) {
                                 val canvas = try { surfaceView.holder.lockCanvas() } catch (_: Exception) { null }
                                 if (canvas != null) {
-                                    canvas.drawBitmap(bmp, null, android.graphics.Rect(0, 0, surfaceView.width.coerceAtLeast(1), surfaceView.height.coerceAtLeast(1)), null)
+                                    // Maintain aspect ratio (letterbox) to avoid cursor position distortion
+                                    val vw = surfaceView.width.coerceAtLeast(1)
+                                    val vh = surfaceView.height.coerceAtLeast(1)
+                                    val bw = bmp.width
+                                    val bh = bmp.height
+                                    val scale = minOf(vw.toFloat() / bw, vh.toFloat() / bh)
+                                    val dw = (bw * scale).toInt()
+                                    val dh = (bh * scale).toInt()
+                                    val dx = (vw - dw) / 2
+                                    val dy = (vh - dh) / 2
+                                    canvas.drawColor(android.graphics.Color.BLACK)
+                                    canvas.drawBitmap(bmp, null, android.graphics.Rect(dx, dy, dx + dw, dy + dh), null)
                                     surfaceView.holder.unlockCanvasAndPost(canvas)
                                 }
                                 bmp.recycle()

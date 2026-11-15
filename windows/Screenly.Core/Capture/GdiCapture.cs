@@ -37,6 +37,9 @@ public sealed class GdiCapture : ICapture
     [DllImport("user32.dll", CharSet = CharSet.Auto)] private static extern bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
     [DllImport("user32.dll", CharSet = CharSet.Ansi)] private static extern bool EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
     [DllImport("gdi32.dll")] private static extern IntPtr CreateSolidBrush(uint crColor);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreatePen(int fnPenStyle, int nWidth, uint crColor);
+    [DllImport("gdi32.dll")] private static extern bool MoveToEx(IntPtr hdc, int x, int y, IntPtr lpPoint);
+    [DllImport("gdi32.dll")] private static extern bool LineTo(IntPtr hdc, int x, int y);
     [DllImport("gdi32.dll")] private static extern bool Ellipse(IntPtr hdc, int left, int top, int right, int bottom);
 
     private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData);
@@ -158,19 +161,23 @@ public sealed class GdiCapture : ICapture
 
             // Composite cursor: yellow backing + native cursor outline
             var ci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
-            if (GetCursorInfo(ref ci) && (ci.flags & CURSOR_SHOWING) != 0 && ci.hCursor != IntPtr.Zero)
+            bool ciOk = GetCursorInfo(ref ci);
+            if (ciOk && (ci.flags & CURSOR_SHOWING) != 0 && ci.hCursor != IntPtr.Zero)
             {
                 int cx = ci.ptScreenPos.x - _monitorX;
                 int cy = ci.ptScreenPos.y - _monitorY;
                 if (cx >= -32 && cy >= -32 && cx < _width + 32 && cy < _height + 32)
                 {
-                    // DrawIconEx with a cursor handle uses the hotspot as origin,
-                    // so pass the hotspot position (cx, cy) directly
-                    IntPtr yelBrush = CreateSolidBrush(0x0000FFFF);
-                    IntPtr oldBrush = SelectObject(hdcMem, yelBrush);
-                    Ellipse(hdcMem, cx - 14, cy - 14, cx + 14, cy + 14);
-                    SelectObject(hdcMem, oldBrush);
-                    DeleteObject(yelBrush);
+                    // Draw a red cross at the cursor hotspot position for debugging
+                    IntPtr redPen = CreatePen(0, 3, 0x000000FF);
+                    IntPtr oldPen = SelectObject(hdcMem, redPen);
+                    MoveToEx(hdcMem, cx - 20, cy, IntPtr.Zero);
+                    LineTo(hdcMem, cx + 20, cy);
+                    MoveToEx(hdcMem, cx, cy - 20, IntPtr.Zero);
+                    LineTo(hdcMem, cx, cy + 20);
+                    SelectObject(hdcMem, oldPen);
+                    DeleteObject(redPen);
+                    // Also draw the cursor
                     DrawIconEx(hdcMem, cx, cy, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
                 }
             }
