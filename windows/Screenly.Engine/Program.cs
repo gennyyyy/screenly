@@ -42,6 +42,7 @@ public static class Program
             {
                 case MessageType.Hello:
                     Console.WriteLine("HELLO received");
+                    session.HasHandshaked = true;
                     var ack = new { status = "ok", sessionId = session.Id.ToString(), pairingToken = (string?)null, config = new { width = cfg.VirtualDisplay.Width, height = cfg.VirtualDisplay.Height, fps = cfg.VirtualDisplay.RefreshHz, bitrateKbps = cfg.Encoding.BitrateKbps } };
                     var ackJson = JsonSerializer.Serialize(ack);
                     await session.SendAsync(MessageType.HelloAck, Encoding.UTF8.GetBytes(ackJson));
@@ -76,7 +77,7 @@ public static class Program
                 {
                     var header = new VideoFrameHeader(seq++, frame.TimestampUs, (ushort)frame.Width, (ushort)frame.Height, true, true);
                     var msg = FrameCodec.Encode(header, frame.JpegData);
-                    foreach (var s in server.Sessions)
+                    foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
                     {
                         try { await s.SendAsync(MessageType.VideoFrame, msg); }
                         catch { }

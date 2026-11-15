@@ -9,6 +9,7 @@ public sealed class Session : IAsyncDisposable
     public Guid Id { get; } = Guid.NewGuid();
     public TcpClient Client { get; }
     public NetworkStream Stream { get; }
+    public bool HasHandshaked { get; set; }
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly Channel<byte[]> _frameChannel = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(1)
     {
