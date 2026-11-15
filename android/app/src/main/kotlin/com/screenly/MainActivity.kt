@@ -41,13 +41,7 @@ fun ScreenlyApp(activity: Activity) {
     var connected by remember { mutableStateOf(false) }
     var streamW by remember { mutableIntStateOf(1920) }
     var streamH by remember { mutableIntStateOf(1080) }
-    // Cursor overlay: cached bitmap + position
-    var cursorBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
-    var cursorHotspotX by remember { mutableIntStateOf(0) }
-    var cursorHotspotY by remember { mutableIntStateOf(0) }
-    var cursorX by remember { mutableIntStateOf(0) }
-    var cursorY by remember { mutableIntStateOf(0) }
-    var cursorVisible by remember { mutableStateOf(false) }
+    // Cursor is composited into video frames on Windows side (no Android overlay)
     val surfaceView = remember { SurfaceView(activity) }
     val decoder = remember { VideoDecoder(surfaceView.holder) }
     DisposableEffect(Unit) { onDispose { decoder.release() } }
@@ -96,24 +90,6 @@ fun ScreenlyApp(activity: Activity) {
                                     val content = DisplayGeometry.contentRect(vw, vh, bmp.width, bmp.height)
                                     canvas.drawColor(android.graphics.Color.BLACK)
                                     canvas.drawBitmap(bmp, null, android.graphics.RectF(content), null)
-                                    // Draw cursor overlay if visible
-                                    if (cursorVisible) {
-                                        val (cx, cy) = DisplayGeometry.streamToView(cursorX, cursorY, content, bmp.width, bmp.height)
-                                        val cb = cursorBitmap
-                                        if (cb != null) {
-                                            // Native cursor image, offset by scaled hotspot
-                                            val scale = content.width() / bmp.width
-                                            val cw = (cb.width * scale).toInt().coerceAtLeast(1)
-                                            val ch = (cb.height * scale).toInt().coerceAtLeast(1)
-                                            val hx = (cursorHotspotX * scale).toInt()
-                                            val hy = (cursorHotspotY * scale).toInt()
-                                            canvas.drawBitmap(cb, null, android.graphics.RectF(cx - hx, cy - hy, cx - hx + cw, cy - hy + ch), null)
-                                        } else {
-                                            // Fallback: yellow marker
-                                            val paint = android.graphics.Paint().apply { color = android.graphics.Color.YELLOW; style = android.graphics.Paint.Style.FILL }
-                                            canvas.drawCircle(cx, cy, 12f, paint)
-                                        }
-                                    }
                                     surfaceView.holder.unlockCanvasAndPost(canvas)
                                 }
                                 bmp.recycle()
@@ -128,24 +104,14 @@ fun ScreenlyApp(activity: Activity) {
                     }
                     is ServerEvent.Disconnected -> {
                         connected = false
-                        cursorVisible = false
                         client.close()
                         activity.stopService(Intent(activity, ConnectionService::class.java))
                     }
                     is ServerEvent.CursorPos -> {
-                        cursorX = ev.x
-                        cursorY = ev.y
-                        cursorVisible = ev.visible
+                        // Cursor is composited into frames; ignore position updates
                     }
                     is ServerEvent.CursorShape -> {
-                        try {
-                            val bmp = android.graphics.BitmapFactory.decodeByteArray(ev.pngData, 0, ev.pngData.size)
-                            if (bmp != null) {
-                                cursorBitmap = bmp
-                                cursorHotspotX = ev.hotspotX
-                                cursorHotspotY = ev.hotspotY
-                            }
-                        } catch (_: Exception) { }
+                        // Cursor is composited into frames; ignore shape updates
                     }
                     else -> {}
                 }

@@ -164,7 +164,8 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
             SelectObject(hdcMem, hBitmap);
             BitBlt(hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
 
-            // Cursor is now sent separately via CursorPos/CursorShape messages (not composited into frame)
+            // Composite cursor into frame using shared helper (native Windows cursor design)
+            CursorDrawer.Draw(hdcMem, _monitorX, _monitorY, _width, _height);
 
             using var bmp = Image.FromHbitmap(hBitmap);
             using var ms = new MemoryStream();
