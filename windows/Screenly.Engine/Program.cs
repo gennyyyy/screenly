@@ -29,6 +29,7 @@ public static class Program
         }
         var capture = new GdiCapture(70);
         capture.Start(0);
+        Console.WriteLine($"Capturing display at origin ({capture.MonitorX}, {capture.MonitorY}), size {capture.Width}x{capture.Height}");
 
         using var mdns = new MdnsBroadcaster(cfg.Port);
         mdns.Start();

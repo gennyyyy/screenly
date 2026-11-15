@@ -30,6 +30,7 @@ public sealed class GdiCapture : ICapture
     [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
     [DllImport("user32.dll")] private static extern int GetSystemMetrics(int nIndex);
     [DllImport("user32.dll")] private static extern bool GetCursorInfo(ref CURSORINFO pci);
+    [DllImport("user32.dll")] private static extern bool GetIconInfo(IntPtr hIcon, out ICONINFO piconinfo);
     [DllImport("user32.dll")] private static extern bool DrawIconEx(IntPtr hdc, int xLeft, int yTop, IntPtr hIcon, int cxWidth, int cyHeight, uint istepIfAniCur, IntPtr hbrFlickerFreeDraw, uint diFlags);
     [DllImport("user32.dll")] private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
     [DllImport("user32.dll", CharSet = CharSet.Auto)] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
@@ -56,6 +57,16 @@ public sealed class GdiCapture : ICapture
         public int flags;
         public IntPtr hCursor;
         public POINT ptScreenPos;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ICONINFO
+    {
+        public bool fIcon;
+        public int xHotspot;
+        public int yHotspot;
+        public IntPtr hbmMask;
+        public IntPtr hbmColor;
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -95,6 +106,10 @@ public sealed class GdiCapture : ICapture
     private int _monitorX;
     private int _monitorY;
     private bool _running;
+    public int MonitorX => _monitorX;
+    public int MonitorY => _monitorY;
+    public int Width => _width;
+    public int Height => _height;
     private readonly int _quality;
 
     public GdiCapture(int quality = 70, string? deviceName = null)
@@ -163,7 +178,14 @@ public sealed class GdiCapture : ICapture
             {
                 int cx = ci.ptScreenPos.x - _monitorX;
                 int cy = ci.ptScreenPos.y - _monitorY;
-                DrawIconEx(hdcMem, cx, cy, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
+                // Only draw if cursor is within the captured display bounds
+                if (cx >= -32 && cy >= -32 && cx < _width + 32 && cy < _height + 32)
+                {
+                    int hx = 0, hy = 0;
+                    var ii = new ICONINFO();
+                    if (GetIconInfo(ci.hCursor, out ii)) { hx = ii.xHotspot; hy = ii.yHotspot; }
+                    DrawIconEx(hdcMem, cx - hx, cy - hy, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
+                }
             }
 
             using var bmp = Image.FromHbitmap(hBitmap);

@@ -40,6 +40,8 @@ class MainActivity : ComponentActivity() {
 fun ScreenlyApp(activity: Activity) {
     val scope = rememberCoroutineScope()
     val client = remember { ScreenlyClient() }
+    val prefs = activity.getSharedPreferences("screenly", android.content.Context.MODE_PRIVATE)
+    var lastHost by remember { mutableStateOf(prefs.getString("lastHost", null)) }
     var hosts by remember { mutableStateOf(listOf<Host>()) }
     var connected by remember { mutableStateOf(false) }
     var streamW by remember { mutableIntStateOf(1920) }
@@ -55,6 +57,8 @@ fun ScreenlyApp(activity: Activity) {
                 when (ev) {
                     is ServerEvent.HelloAcked -> {
                         connected = true
+                        // Persist the connected host
+                        // (host IP is not in ack; store from the connect call is handled separately)
                         ev.ack.config?.let { streamW = it.width; streamH = it.height }
                         activity.startService(Intent(activity, ConnectionService::class.java))
                     }
@@ -95,6 +99,8 @@ fun ScreenlyApp(activity: Activity) {
                     Button(onClick = {
                         scope.launch {
                             if (client.connect(h.host, h.port)) {
+                                prefs.edit().putString("lastHost", h.host).apply()
+                                lastHost = h.host
                                 val dm = activity.resources.displayMetrics
                                 client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = dm.widthPixels, screenHeight = dm.heightPixels, densityDpi = dm.densityDpi))
                             }
@@ -108,7 +114,10 @@ fun ScreenlyApp(activity: Activity) {
                 Spacer(Modifier.height(8.dp))
                 Button(onClick = {
                     if (ip.isNotBlank()) scope.launch {
-                        if (client.connect(ip.trim(), 7543)) {
+                        val host = ip.trim()
+                        if (client.connect(host, 7543)) {
+                            prefs.edit().putString("lastHost", host).apply()
+                            lastHost = host
                             val dm = activity.resources.displayMetrics
                             client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = dm.widthPixels, screenHeight = dm.heightPixels, densityDpi = dm.densityDpi))
                         }

@@ -19,6 +19,7 @@ PrivilegesRequired=admin
 [Files]
 Source: "..\app\Screenly.Engine.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\app\Screenly.Host.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\driver\parsec-vdd\ParsecVDisplay-v0.45-setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
@@ -37,6 +38,8 @@ var
 begin
   if CurStep = ssPostInstall then
   begin
+    // Install Parsec VDD driver silently (reboot may be required on first install)
+    Exec(ExpandConstant('{tmp}\ParsecVDisplay-v0.45-setup.exe'), '/S', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     // Add firewall rule for port 7543
     Exec('netsh', 'advfirewall firewall add rule name="Screenly" dir=in action=allow protocol=TCP localport=7543', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   end;

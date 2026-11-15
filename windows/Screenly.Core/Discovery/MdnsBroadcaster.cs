@@ -19,6 +19,8 @@ public sealed class MdnsBroadcaster : IDisposable
     private Thread? _listenThread;
     private Thread? _announceThread;
     private volatile bool _running;
+    private readonly Dictionary<string, DateTime> _lastResponse = new();
+    private readonly object _rateLock = new();
 
     public MdnsBroadcaster(int servicePort)
     {
@@ -58,13 +60,22 @@ public sealed class MdnsBroadcaster : IDisposable
             {
                 var data = _udp!.Receive(ref remote);
                 if (data.Length < 12) continue;
+                // Ignore our own multicast echo.
+                if (remote.Address.Equals(_localIp)) continue;
+                // Only answer queries (QR bit 0), never responses.
+                if (!IsQuery(data)) continue;
                 // Check if any question contains "_screenly"
-                if (ContainsServiceQuery(data))
+                if (!ContainsServiceQuery(data)) continue;
+                // Rate-limit: one response per remote IP per 1s.
+                lock (_rateLock)
                 {
-                    var resp = BuildResponse();
-                    var ep = new IPEndPoint(IPAddress.Parse(MulticastIp), Port);
-                    _udp.Send(resp, resp.Length, ep);
+                    if (_lastResponse.TryGetValue(remote.Address.ToString(), out var last)
+                        && (DateTime.UtcNow - last).TotalSeconds < 1) continue;
+                    _lastResponse[remote.Address.ToString()] = DateTime.UtcNow;
                 }
+                var resp = BuildResponse();
+                var ep = new IPEndPoint(IPAddress.Parse(MulticastIp), Port);
+                _udp.Send(resp, resp.Length, ep);
             }
             catch (SocketException) when (!_running) { break; }
             catch { }
@@ -88,6 +99,8 @@ public sealed class MdnsBroadcaster : IDisposable
             Thread.Sleep(count < 5 ? 2000 : 30000);
         }
     }
+
+    private static bool IsQuery(byte[] data) => (data[2] & 0x80) == 0;
 
     private bool ContainsServiceQuery(byte[] data)
     {
@@ -114,15 +127,10 @@ public sealed class MdnsBroadcaster : IDisposable
         // Header: ID=0, flags=0x8400 (response, authoritative), counts
         w.Write((ushort)0);       // ID
         w.Write((ushort)0x8400);  // flags: response
-        w.Write((ushort)1);       // QDCOUNT (echo one question)
+        w.Write((ushort)0);       // QDCOUNT
         w.Write((ushort)3);       // ANCOUNT: PTR, SRV, A (plus TXT in additional)
         w.Write((ushort)0);       // NSCOUNT
         w.Write((ushort)1);       // ARCOUNT (TXT)
-
-        // Question: _screenly._tcp.local. PTR IN
-        WriteName(w, ServiceType);
-        w.Write((ushort)12);      // QTYPE PTR
-        w.Write((ushort)1);       // QCLASS IN
 
         // Answer 1: PTR record
         WriteName(w, ServiceType);
