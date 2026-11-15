@@ -21,26 +21,14 @@ Source: "..\app\Screenly.Engine.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\app\Screenly.Host.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\driver\parsec-vdd\ParsecVDisplay-v0.45-setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
 
+[Tasks]
+Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
+
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
-[Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
-
 [Run]
+Filename: "{tmp}\ParsecVDisplay-v0.45-setup.exe"; Parameters: "/S"; StatusMsg: "Installing virtual display driver..."; Flags: waituntilterminated
+Filename: "netsh"; Parameters: "advfirewall firewall add rule name=""Screenly"" dir=in action=allow protocol=TCP localport=7543"; Flags: runhidden waituntilterminated
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch Screenly"; Flags: nowait postinstall skipifsilent
-
-[Code]
-procedure CurStepChanged(CurStep: TSetupStep);
-var
-  ResultCode: Integer;
-begin
-  if CurStep = ssPostInstall then
-  begin
-    // Install Parsec VDD driver silently (reboot may be required on first install)
-    Exec(ExpandConstant('{tmp}\ParsecVDisplay-v0.45-setup.exe'), '/S', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-    // Add firewall rule for port 7543
-    Exec('netsh', 'advfirewall firewall add rule name="Screenly" dir=in action=allow protocol=TCP localport=7543', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
-  end;
-end;
