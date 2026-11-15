@@ -17,6 +17,8 @@ public sealed class GdiCapture : ICapture
 {
     [DllImport("gdi32.dll", CharSet = CharSet.Auto)] private static extern IntPtr CreateDC(string lpszDriver, string? lpszDevice, string? lpszOutput, IntPtr lpInitData);
     [DllImport("gdi32.dll")] private static extern bool BitBlt(IntPtr hdcDest, int x, int y, int cx, int cy, IntPtr hdcSrc, int x1, int y1, int rop);
+    [DllImport("gdi32.dll")] private static extern bool StretchBlt(IntPtr hdcDest, int x, int y, int cx, int cy, IntPtr hdcSrc, int x1, int y1, int cx1, int cy1, int rop);
+    [DllImport("gdi32.dll")] private static extern int SetStretchBltMode(IntPtr hdc, int mode);
     [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
     [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int cx, int cy);
     [DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr hdc, IntPtr h);
@@ -69,6 +71,8 @@ public sealed class GdiCapture : ICapture
     private IntPtr _hdcSrc = IntPtr.Zero;
     private int _width;
     private int _height;
+    private int _encW;
+    private int _encH;
     private int _monitorX;
     private int _monitorY;
     private bool _running;
@@ -77,11 +81,14 @@ public sealed class GdiCapture : ICapture
     public int Width => _width;
     public int Height => _height;
     private readonly int _quality;
+    private static ImageCodecInfo? _jpegCodec;
 
-    public GdiCapture(int quality = 70, string? deviceName = null)
+    public GdiCapture(int quality = 70, string? deviceName = null, int encW = 1280, int encH = 720)
     {
         _quality = quality;
         _deviceName = deviceName;
+        _encW = encW;
+        _encH = encH;
     }
 
     public void Start(int displayId)
@@ -119,9 +126,10 @@ public sealed class GdiCapture : ICapture
             else { hdcSrc = GetDC(IntPtr.Zero); createdDC = true; }
 
             var hdcMem = CreateCompatibleDC(hdcSrc);
-            var hBitmap = CreateCompatibleBitmap(hdcSrc, _width, _height);
+            var hBitmap = CreateCompatibleBitmap(hdcSrc, _encW, _encH);
             SelectObject(hdcMem, hBitmap);
-            BitBlt(hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
+            SetStretchBltMode(hdcMem, 4); // HALFTONE
+            StretchBlt(hdcMem, 0, 0, _encW, _encH, hdcSrc, 0, 0, _width, _height, SRCCOPY);
 
             // Composite cursor: yellow backing + native cursor outline
             var ci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
@@ -129,23 +137,29 @@ public sealed class GdiCapture : ICapture
             {
                 int cx = ci.ptScreenPos.x - _monitorX;
                 int cy = ci.ptScreenPos.y - _monitorY;
+                double scaleX = (double)_encW / _width;
+                double scaleY = (double)_encH / _height;
+                int scx = (int)(cx * scaleX);
+                int scy = (int)(cy * scaleY);
                 if (cx >= -32 && cy >= -32 && cx < _width + 32 && cy < _height + 32)
                 {
                     int hx = 0, hy = 0;
                     var ii = new ICONINFO();
                     if (GetIconInfo(ci.hCursor, out ii)) { hx = ii.xHotspot; hy = ii.yHotspot; if (ii.hbmMask != IntPtr.Zero) DeleteObject(ii.hbmMask); if (ii.hbmColor != IntPtr.Zero) DeleteObject(ii.hbmColor); }
+                    int shx = (int)(hx * scaleX);
+                    int shy = (int)(hy * scaleY);
                     IntPtr yelBrush = CreateSolidBrush(0x0000FFFF);
                     IntPtr oldBrush = SelectObject(hdcMem, yelBrush);
-                    Ellipse(hdcMem, cx - 14, cy - 14, cx + 14, cy + 14);
+                    Ellipse(hdcMem, scx - 14, scy - 14, scx + 14, scy + 14);
                     SelectObject(hdcMem, oldBrush);
                     DeleteObject(yelBrush);
-                    DrawIconEx(hdcMem, cx - hx, cy - hy, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
+                    DrawIconEx(hdcMem, scx - shx, scy - shy, ci.hCursor, (int)(24 * scaleX), (int)(24 * scaleY), 0, IntPtr.Zero, DI_NORMAL);
                 }
             }
 
             using var bmp = Image.FromHbitmap(hBitmap);
             using var ms = new MemoryStream();
-            var jpegCodec = ImageCodecInfo.GetImageEncoders().First(c => c.MimeType == "image/jpeg");
+            var jpegCodec = _jpegCodec ??= ImageCodecInfo.GetImageEncoders().First(c => c.MimeType == "image/jpeg");
             var encParams = new EncoderParameters(1);
             encParams.Param[0] = new EncoderParameter(Encoder.Quality, (long)_quality);
             bmp.Save(ms, jpegCodec, encParams);
@@ -154,7 +168,7 @@ public sealed class GdiCapture : ICapture
             DeleteDC(hdcMem);
             if (createdDC) ReleaseDC(IntPtr.Zero, hdcSrc);
 
-            frame = new CapturedFrame(ms.ToArray(), _width, _height, (ulong)DateTime.UtcNow.Ticks);
+            frame = new CapturedFrame(ms.ToArray(), _encW, _encH, (ulong)DateTime.UtcNow.Ticks);
             return true;
         }
         catch { return false; }
@@ -174,6 +188,7 @@ public sealed class GdiCapture : ICapture
     public void Stop() => _running = false;
     public void Dispose() => Stop();
 
+    public static string? FindVirtualDisplayDevicePublic() => FindVirtualDisplayDevice();
     private static string? FindVirtualDisplayDevice()
     {
         var dd = new DISPLAY_DEVICE { cb = Marshal.SizeOf<DISPLAY_DEVICE>() };

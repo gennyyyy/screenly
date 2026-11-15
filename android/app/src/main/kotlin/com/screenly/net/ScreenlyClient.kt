@@ -55,6 +55,8 @@ class ScreenlyClient {
                 val type = inp.readByte()
                 val payload = ByteArray(len - 1)
                 if (payload.isNotEmpty()) inp.readFully(payload)
+                // Frame-skip: if more data pending, discard this frame to always show latest
+                if (type == Protocol.VIDEO_FRAME && (socket?.getInputStream()?.available() ?: 0) > 0) continue
                 dispatch(type, payload)
             }
         } catch (e: Exception) {

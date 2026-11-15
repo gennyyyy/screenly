@@ -9,6 +9,51 @@ using Screenly.Core.Streaming;
 
 namespace Screenly.Engine;
 
+// P/Invoke for display resolution change
+public static class DisplayHelper
+{
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    public struct DEVMODE
+    {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+        public ushort dmSpecVersion;
+        public ushort dmDriverVersion;
+        public ushort dmSize;
+        public ushort dmDriverExtra;
+        public uint dmFields;
+        public int dmOrientation;
+        public int dmPaperSize;
+        public int dmPaperLength;
+        public int dmPaperWidth;
+        public int dmScale;
+        public int dmCopies;
+        public int dmDefaultSource;
+        public int dmPrintQuality;
+        public int dmColor;
+        public int dmDuplex;
+        public int dmYResolution;
+        public int dmTTOption;
+        public int dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+        public ushort dmLogPixels;
+        public uint dmBitsPerPel;
+        public uint dmPelsWidth;
+        public uint dmPelsHeight;
+        public uint dmDisplayFlags;
+        public uint dmDisplayFrequency;
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Ansi)]
+    public static extern int ChangeDisplaySettingsEx(string lpszDeviceName, ref DEVMODE lpDevMode, IntPtr hwnd, uint dwflags, IntPtr lParam);
+
+    public const uint DM_PELSWIDTH = 0x00080000;
+    public const uint DM_PELSHEIGHT = 0x00100000;
+    public const uint DM_DISPLAYFREQUENCY = 0x00400000;
+    public const uint CDS_UPDATEREGISTRY = 0x00000001;
+    public const uint CDS_TEST = 0x00000002;
+    public const int DISP_CHANGE_SUCCESSFUL = 0;
+}
+
 public static class Program
 {
     [DllImport("user32.dll")] private static extern int SetDisplayConfig(uint numPathArrayElements, IntPtr pathArray, uint numModeArrayElements, IntPtr modeArray, uint flags);
@@ -25,6 +70,23 @@ public static class Program
             Console.WriteLine($"Virtual display created (handle {vddHandle.Id})");
             // Give Windows a moment to register the new monitor
             await Task.Delay(1500);
+            // Set resolution to 1280x720 (VDD default is 1920x1080)
+            try
+            {
+                var devName = GdiCapture.FindVirtualDisplayDevicePublic();
+                if (devName != null)
+                {
+                    var dm = new DisplayHelper.DEVMODE();
+                    dm.dmSize = (ushort)Marshal.SizeOf<DisplayHelper.DEVMODE>();
+                    dm.dmPelsWidth = (uint)cfg.VirtualDisplay.Width;
+                    dm.dmPelsHeight = (uint)cfg.VirtualDisplay.Height;
+                    dm.dmDisplayFrequency = 60;
+                    dm.dmFields = DisplayHelper.DM_PELSWIDTH | DisplayHelper.DM_PELSHEIGHT | DisplayHelper.DM_DISPLAYFREQUENCY;
+                    var res = DisplayHelper.ChangeDisplaySettingsEx(devName, ref dm, IntPtr.Zero, DisplayHelper.CDS_UPDATEREGISTRY, IntPtr.Zero);
+                    Console.WriteLine($"SetMode {cfg.VirtualDisplay.Width}x{cfg.VirtualDisplay.Height}: {(res == 0 ? "OK" : $"err={res}")}");
+                }
+            }
+            catch (Exception ex) { Console.WriteLine($"SetMode failed: {ex.Message}"); }
             // Force extend topology so the virtual display is NOT a mirror of the primary
             try { SetDisplayConfig(0, IntPtr.Zero, 0, IntPtr.Zero, SDC_TOPOLOGY_EXTEND | SDC_APPLY); } catch { }
         }
@@ -105,7 +167,7 @@ public static class Program
                     }
                     if (seq % 100 == 0) Console.WriteLine($"frames sent: {seq}");
                 }
-                await Task.Delay(66, cts.Token); // ~15 fps
+                await Task.Delay(33, cts.Token); // ~30 fps
             }
         }, cts.Token);
 

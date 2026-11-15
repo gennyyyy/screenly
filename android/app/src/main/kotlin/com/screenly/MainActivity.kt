@@ -35,8 +35,8 @@ class MainActivity : ComponentActivity() {
 fun ScreenlyApp(activity: Activity) {
     val client = remember { ScreenlyClient() }
     var connected by remember { mutableStateOf(false) }
-    var streamW by remember { mutableIntStateOf(1920) }
-    var streamH by remember { mutableIntStateOf(1080) }
+    var streamW by remember { mutableIntStateOf(1280) }
+    var streamH by remember { mutableIntStateOf(720) }
     val surfaceView = remember { SurfaceView(activity) }
     val decoder = remember { VideoDecoder(surfaceView.holder) }
     DisposableEffect(Unit) { onDispose { decoder.release() } }

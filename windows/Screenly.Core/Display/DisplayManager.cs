@@ -132,11 +132,33 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
     {
         var h = OpenHandle();
         if (h == IntPtr.Zero) throw new InvalidOperationException("Parsec VDD device not found (driver not installed?)");
+        // Clean up stale display from a previous (crashed) run
+        var idxFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Screenly", "vdd-index.txt");
+        try
+        {
+            if (File.Exists(idxFile))
+            {
+                var oldIdx = int.Parse(File.ReadAllText(idxFile).Trim());
+                var buf = new byte[32];
+                BitConverter.GetBytes(oldIdx).CopyTo(buf, 1);
+                IoControl(VDD_IOCTL_REMOVE, buf, null, 2000);
+                File.Delete(idxFile);
+            }
+        }
+        catch { }
         var outBuf = new byte[4];
         if (!IoControl(VDD_IOCTL_ADD, new byte[32], outBuf, 5000))
             throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
         int index = BitConverter.ToInt32(outBuf, 0);
         if (index < 0 || index > 15) throw new InvalidOperationException($"Invalid display index: {index}");
+        // Persist index so next run can clean up if this process is killed
+        try
+        {
+            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Screenly");
+            Directory.CreateDirectory(dir);
+            File.WriteAllText(Path.Combine(dir, "vdd-index.txt"), index.ToString());
+        }
+        catch { }
         var handle = new DisplayHandle(_nextId++);
         _displays[handle.Id] = index;
         StartPing();
@@ -196,6 +218,7 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
         StopPing();
         foreach (var kv in _displays.Keys.ToList())
             RemoveAsync(new DisplayHandle(kv)).GetAwaiter().GetResult();
+        try { File.Delete(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Screenly", "vdd-index.txt")); } catch { }
         if (_handle != IntPtr.Zero) { CloseHandle(_handle); _handle = IntPtr.Zero; }
     }
 }
