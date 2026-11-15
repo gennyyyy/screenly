@@ -110,6 +110,9 @@ fun ScreenlyApp(activity: Activity) {
                     }
                     is ServerEvent.Disconnected -> {
                         connected = false
+                        cursorVisible = false
+                        cursorX = 0
+                        cursorY = 0
                         client.close()
                         activity.stopService(Intent(activity, ConnectionService::class.java))
                     }

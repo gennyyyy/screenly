@@ -75,8 +75,13 @@ public static class Program
     [DllImport("user32.dll")] private static extern int SetDisplayConfig(uint numPathArrayElements, IntPtr pathArray, uint numModeArrayElements, IntPtr modeArray, uint flags);
     private const uint SDC_TOPOLOGY_EXTEND = 0x00000004;
     private const uint SDC_APPLY = 0x00000080;
+    [DllImport("user32.dll")] private static extern bool SetProcessDPIAware();
+    [DllImport("shcore.dll")] private static extern int SetProcessDpiAwareness(int awareness);
+
     public static async Task Main(string[] args)
     {
+        // Ensure DPI awareness before any display APIs
+        try { SetProcessDpiAwareness(2); } catch { try { SetProcessDPIAware(); } catch { } }
         var cfg = ConfigStore.Load();
         using var display = new DisplayManager(new ParsecVddDisplay());
         DisplayHandle vddHandle;
