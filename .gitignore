@@ -10,3 +10,4 @@ app/*
 local.properties
 android/local.properties
 .idea/
+android/.kotlin/
