@@ -146,14 +146,13 @@ public sealed class GdiCapture : ICapture
                     int hx = 0, hy = 0;
                     var ii = new ICONINFO();
                     if (GetIconInfo(ci.hCursor, out ii)) { hx = ii.xHotspot; hy = ii.yHotspot; if (ii.hbmMask != IntPtr.Zero) DeleteObject(ii.hbmMask); if (ii.hbmColor != IntPtr.Zero) DeleteObject(ii.hbmColor); }
-                    int shx = (int)(hx * scaleX);
-                    int shy = (int)(hy * scaleY);
+                    // Hotspot is in cursor-icon coords (not scaled); position is in encode coords
                     IntPtr yelBrush = CreateSolidBrush(0x0000FFFF);
                     IntPtr oldBrush = SelectObject(hdcMem, yelBrush);
                     Ellipse(hdcMem, scx - 14, scy - 14, scx + 14, scy + 14);
                     SelectObject(hdcMem, oldBrush);
                     DeleteObject(yelBrush);
-                    DrawIconEx(hdcMem, scx - shx, scy - shy, ci.hCursor, (int)(24 * scaleX), (int)(24 * scaleY), 0, IntPtr.Zero, DI_NORMAL);
+                    DrawIconEx(hdcMem, scx - hx, scy - hy, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
                 }
             }
 
