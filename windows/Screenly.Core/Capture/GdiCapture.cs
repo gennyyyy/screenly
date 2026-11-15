@@ -13,9 +13,6 @@ public interface ICapture : IDisposable
     void Stop();
 }
 
-// GDI BitBlt capture. Captures a specific monitor by device name, or the
-// primary screen if no device name is given. Used for the virtual (extended)
-// display created by Parsec VDD.
 public sealed class GdiCapture : ICapture
 {
     [DllImport("gdi32.dll", CharSet = CharSet.Auto)] private static extern IntPtr CreateDC(string lpszDriver, string? lpszDevice, string? lpszOutput, IntPtr lpInitData);
@@ -34,60 +31,22 @@ public sealed class GdiCapture : ICapture
     [DllImport("user32.dll")] private static extern bool DrawIconEx(IntPtr hdc, int xLeft, int yTop, IntPtr hIcon, int cxWidth, int cyHeight, uint istepIfAniCur, IntPtr hbrFlickerFreeDraw, uint diFlags);
     [DllImport("user32.dll")] private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
     [DllImport("user32.dll", CharSet = CharSet.Auto)] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
+    [DllImport("user32.dll", CharSet = CharSet.Auto)] private static extern bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
+    [DllImport("gdi32.dll")] private static extern IntPtr CreateSolidBrush(uint crColor);
+    [DllImport("gdi32.dll")] private static extern bool Ellipse(IntPtr hdc, int left, int top, int right, int bottom);
 
     private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData);
 
-    [StructLayout(LayoutKind.Sequential)]
-    private struct RECT { public int left, top, right, bottom; }
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
-    private struct MONITORINFOEX
+    [StructLayout(LayoutKind.Sequential)] private struct RECT { public int left, top, right, bottom; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)] private struct MONITORINFOEX
     {
-        public int cbSize;
-        public RECT rcMonitor;
-        public RECT rcWork;
-        public uint dwFlags;
+        public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice;
     }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct CURSORINFO
-    {
-        public int cbSize;
-        public int flags;
-        public IntPtr hCursor;
-        public POINT ptScreenPos;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct ICONINFO
-    {
-        public bool fIcon;
-        public int xHotspot;
-        public int yHotspot;
-        public IntPtr hbmMask;
-        public IntPtr hbmColor;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct POINT
-    {
-        public int x;
-        public int y;
-    }
-
-    private const int CURSOR_SHOWING = 0x00000001;
-    private const uint DI_NORMAL = 0x0003;
-    [DllImport("user32.dll", CharSet = CharSet.Auto)] private static extern bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
-
-    private const int SM_CXSCREEN = 0;
-    private const int SM_CYSCREEN = 1;
-    private const int HORZRES = 8;
-    private const int VERTRES = 10;
-    private const int SRCCOPY = 0x00CC0020;
-
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
-    private struct DISPLAY_DEVICE
+    [StructLayout(LayoutKind.Sequential)] private struct CURSORINFO { public int cbSize; public int flags; public IntPtr hCursor; public POINT ptScreenPos; }
+    [StructLayout(LayoutKind.Sequential)] private struct POINT { public int x; public int y; }
+    [StructLayout(LayoutKind.Sequential)] private struct ICONINFO { public bool fIcon; public int xHotspot; public int yHotspot; public IntPtr hbmMask; public IntPtr hbmColor; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)] private struct DISPLAY_DEVICE
     {
         public int cb;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string DeviceName;
@@ -97,7 +56,14 @@ public sealed class GdiCapture : ICapture
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceKey;
     }
 
+    private const int CURSOR_SHOWING = 0x00000001;
+    private const uint DI_NORMAL = 0x0003;
     private const uint DISPLAY_DEVICE_ATTACHED_TO_DESKTOP = 0x00000001;
+    private const int SM_CXSCREEN = 0;
+    private const int SM_CYSCREEN = 1;
+    private const int HORZRES = 8;
+    private const int VERTRES = 10;
+    private const int SRCCOPY = 0x00CC0020;
 
     private string? _deviceName;
     private IntPtr _hdcSrc = IntPtr.Zero;
@@ -120,12 +86,7 @@ public sealed class GdiCapture : ICapture
 
     public void Start(int displayId)
     {
-        if (_deviceName == null)
-        {
-            // Find the Parsec VDD virtual display device
-            _deviceName = FindVirtualDisplayDevice();
-        }
-
+        if (_deviceName == null) _deviceName = FindVirtualDisplayDevice();
         if (_deviceName != null)
         {
             _hdcSrc = CreateDC(_deviceName, null, null, IntPtr.Zero);
@@ -135,17 +96,14 @@ public sealed class GdiCapture : ICapture
                 _height = GetDeviceCaps(_hdcSrc, VERTRES);
                 if (_width <= 0) _width = 1920;
                 if (_height <= 0) _height = 1080;
-                // Find monitor origin
                 EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, MonitorCallback, IntPtr.Zero);
             }
         }
-
         if (_hdcSrc == IntPtr.Zero)
         {
             _width = GetSystemMetrics(SM_CXSCREEN);
             _height = GetSystemMetrics(SM_CYSCREEN);
         }
-
         _running = true;
     }
 
@@ -157,33 +115,30 @@ public sealed class GdiCapture : ICapture
         {
             IntPtr hdcSrc;
             bool createdDC = false;
-            if (_hdcSrc != IntPtr.Zero)
-            {
-                hdcSrc = _hdcSrc;
-            }
-            else
-            {
-                hdcSrc = GetDC(IntPtr.Zero);
-                createdDC = true;
-            }
+            if (_hdcSrc != IntPtr.Zero) hdcSrc = _hdcSrc;
+            else { hdcSrc = GetDC(IntPtr.Zero); createdDC = true; }
 
             var hdcMem = CreateCompatibleDC(hdcSrc);
             var hBitmap = CreateCompatibleBitmap(hdcSrc, _width, _height);
             SelectObject(hdcMem, hBitmap);
             BitBlt(hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
 
-            // Composite cursor
+            // Composite cursor: yellow backing + native cursor outline
             var ci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
             if (GetCursorInfo(ref ci) && (ci.flags & CURSOR_SHOWING) != 0 && ci.hCursor != IntPtr.Zero)
             {
                 int cx = ci.ptScreenPos.x - _monitorX;
                 int cy = ci.ptScreenPos.y - _monitorY;
-                // Only draw if cursor is within the captured display bounds
                 if (cx >= -32 && cy >= -32 && cx < _width + 32 && cy < _height + 32)
                 {
                     int hx = 0, hy = 0;
                     var ii = new ICONINFO();
-                    if (GetIconInfo(ci.hCursor, out ii)) { hx = ii.xHotspot; hy = ii.yHotspot; }
+                    if (GetIconInfo(ci.hCursor, out ii)) { hx = ii.xHotspot; hy = ii.yHotspot; if (ii.hbmMask != IntPtr.Zero) DeleteObject(ii.hbmMask); if (ii.hbmColor != IntPtr.Zero) DeleteObject(ii.hbmColor); }
+                    IntPtr yelBrush = CreateSolidBrush(0x0000FFFF);
+                    IntPtr oldBrush = SelectObject(hdcMem, yelBrush);
+                    Ellipse(hdcMem, cx - 14, cy - 14, cx + 14, cy + 14);
+                    SelectObject(hdcMem, oldBrush);
+                    DeleteObject(yelBrush);
                     DrawIconEx(hdcMem, cx - hx, cy - hy, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
                 }
             }
@@ -227,7 +182,6 @@ public sealed class GdiCapture : ICapture
         {
             if ((dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) != 0)
             {
-                // Parsec VDD devices typically have "Parsec" or "PSCCDD" in the name/string
                 if (dd.DeviceString.Contains("Parsec", StringComparison.OrdinalIgnoreCase) ||
                     dd.DeviceName.Contains("Parsec", StringComparison.OrdinalIgnoreCase) ||
                     dd.DeviceID.Contains("Parsec", StringComparison.OrdinalIgnoreCase))
@@ -238,6 +192,6 @@ public sealed class GdiCapture : ICapture
             i++;
             dd.cb = Marshal.SizeOf<DISPLAY_DEVICE>();
         }
-        return null; // fall back to primary
+        return null;
     }
 }
