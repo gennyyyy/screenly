@@ -49,23 +49,7 @@ fun ScreenlyApp(activity: Activity) {
     DisposableEffect(Unit) { onDispose { decoder.release() } }
 
     LaunchedEffect(Unit) {
-        android.util.Log.e("MainActivity", "LaunchedEffect fired")
         launch { discoverHosts(activity).collect { hosts = it } }
-        // Auto-connect for testing (USB tunnel)
-        launch {
-            android.util.Log.e("MainActivity", "auto-connect coroutine started")
-            kotlinx.coroutines.delay(1000)
-            if (!connected) {
-                android.util.Log.e("MainActivity", "auto-connecting to 127.0.0.1")
-                if (client.connect("127.0.0.1", 7543)) {
-                    android.util.Log.e("MainActivity", "connected, sending Hello")
-                    val dm = activity.resources.displayMetrics
-                    client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = dm.widthPixels, screenHeight = dm.heightPixels, densityDpi = dm.densityDpi))
-                } else {
-                    android.util.Log.e("MainActivity", "connect returned false")
-                }
-            }
-        }
         launch {
             client.events.collect { ev ->
                 when (ev) {

@@ -46,6 +46,7 @@ public static class Program
                     var ack = new { status = "ok", sessionId = session.Id.ToString(), pairingToken = (string?)null, config = new { width = cfg.VirtualDisplay.Width, height = cfg.VirtualDisplay.Height, fps = cfg.VirtualDisplay.RefreshHz, bitrateKbps = cfg.Encoding.BitrateKbps } };
                     var ackJson = JsonSerializer.Serialize(ack);
                     await session.SendAsync(MessageType.HelloAck, Encoding.UTF8.GetBytes(ackJson));
+                    Console.WriteLine("HELLO_ACK sent");
                     break;
                 case MessageType.Ping:
                     await session.SendAsync(MessageType.Pong, Array.Empty<byte>());
