@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Runtime.InteropServices;
 using Screenly.Core.Capture;
 using Screenly.Core.Config;
 // USB-only: no mDNS discovery
@@ -10,6 +11,9 @@ namespace Screenly.Engine;
 
 public static class Program
 {
+    [DllImport("user32.dll")] private static extern int SetDisplayConfig(uint numPathArrayElements, IntPtr pathArray, uint numModeArrayElements, IntPtr modeArray, uint flags);
+    private const uint SDC_TOPOLOGY_EXTEND = 0x00000004;
+    private const uint SDC_APPLY = 0x00000080;
     public static async Task Main(string[] args)
     {
         var cfg = ConfigStore.Load();
@@ -21,6 +25,8 @@ public static class Program
             Console.WriteLine($"Virtual display created (handle {vddHandle.Id})");
             // Give Windows a moment to register the new monitor
             await Task.Delay(1500);
+            // Force extend topology so the virtual display is NOT a mirror of the primary
+            try { SetDisplayConfig(0, IntPtr.Zero, 0, IntPtr.Zero, SDC_TOPOLOGY_EXTEND | SDC_APPLY); } catch { }
         }
         catch (Exception ex)
         {
