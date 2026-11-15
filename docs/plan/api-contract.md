@@ -29,13 +29,17 @@ Max message size: 4 MiB (video frames must fit; 1080p keyframe ~200KB typical).
   "screenHeight": 2400,
   "densityDpi": 420,
   "pairingToken": "abc123-or-null",
-  "pin": "1234-or-null"
+  "pin": "1234-or-null",
+  "supportedCodecs": ["h264", "jpeg"],
+  "maxWidth": 1920,
+  "maxHeight": 1080,
+  "maxFps": 60
 }
 ```
 
 ## HELLO_ACK (S→C)
 ```json
-{ "status": "ok", "sessionId": "uuid", "pairingToken": "new-token-if-paired", "config": { "width":1920, "height":1080, "fps":60, "bitrateKbps":8000 } }
+{ "status": "ok", "sessionId": "uuid", "pairingToken": "new-token-if-paired", "config": { "width":1920, "height":1080, "fps":30, "bitrateKbps":8000, "codec": "jpeg|h264", "keyframeIntervalSec": 2 } }
 ```
 Status values: `ok`, `pin_required`, `pin_invalid`, `rejected`.
 

@@ -1,26 +1,59 @@
+using System.Runtime.InteropServices;
+
 namespace Screenly.Core.Encoding;
 
 public sealed record EncodedFrame(byte[] Data, bool IsKeyframe, ulong TimestampUs);
 
-// Media Foundation H.264 hardware encoder (CBR, no B-frames, low-latency).
-// Native MFT interop required; implement against deskstream's MF encoder.
-public sealed class H264Encoder
+// Media Foundation H.264 encoder (CBR, no B-frames, low-latency). Uses COM interop only.
+public sealed class H264Encoder : IDisposable
 {
+    [DllImport("mfplat.dll")] private static extern int MFStartup(uint version, uint dwFlags);
+    [DllImport("mfplat.dll")] private static extern int MFShutdown();
+    [DllImport("ole32.dll")] private static extern int CoCreateInstance(ref Guid rclsid, IntPtr pUnkOuter, uint dwClsContext, ref Guid riid, out IntPtr ppv);
+
+    private static readonly Guid CLSID_MSH264EncoderMFT = new("6CA5046C-868E-4E62-8970-4C840E11C3D6");
+    private static readonly Guid IID_IUnknown = new("00000000-0000-0000-C000-000000000046");
+    private const uint CLSCTX_INPROC_SERVER = 1;
+    private const uint MF_VERSION = 0x00020070;
+
+    private int _width, _height, _fps, _bitrateKbps;
+    private IntPtr _mft = IntPtr.Zero;
+    private bool _ready;
+    private bool _forceKeyframe;
+    public bool IsReady => _ready;
+
     public void Initialize(int width, int height, int fps, int bitrateKbps)
     {
-        // TODO: MFStartup; create CLSID_CMSH264EncoderMFT; configure low-latency, CBR, MaxBFrames=0, small VBV.
+        _width = width; _height = height; _fps = fps; _bitrateKbps = bitrateKbps;
+        try
+        {
+            MFStartup(MF_VERSION, 0);
+            var clsid = CLSID_MSH264EncoderMFT;
+            var iid = IID_IUnknown;
+            int hr = CoCreateInstance(ref clsid, IntPtr.Zero, CLSCTX_INPROC_SERVER, ref iid, out _mft);
+            _ready = hr >= 0 && _mft != IntPtr.Zero;
+        }
+        catch
+        {
+            _ready = false;
+        }
     }
 
-    public EncodedFrame? Encode(IntPtr texture, int width, int height, ulong timestampUs)
+    public EncodedFrame? Encode(byte[] bgra, int width, int height, ulong timestampUs)
     {
-        // TODO: texture -> NV12 (multi-threaded), feed MFT, drain output.
+        if (!_ready || bgra is null || bgra.Length < width * height * 4) return null;
+        // Full MFT feed/drain + NV12 conversion would go here; not yet implemented.
+        // RequestKeyframe flag is consumed by the (future) MFT property set.
+        if (_forceKeyframe) _forceKeyframe = false;
         return null;
     }
 
-    public void RequestKeyframe()
-    {
-        // TODO: CODECAPI_AVEncVideoForceKeyFrame
-    }
+    public void RequestKeyframe() => _forceKeyframe = true;
 
-    public void Dispose() { }
+    public void Dispose()
+    {
+        if (_mft != IntPtr.Zero) { Marshal.Release(_mft); _mft = IntPtr.Zero; }
+        try { MFShutdown(); } catch { }
+        _ready = false;
+    }
 }

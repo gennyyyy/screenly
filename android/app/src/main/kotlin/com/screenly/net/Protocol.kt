@@ -11,7 +11,7 @@ sealed interface ClientMsg
 @Serializable data class TouchEvt(val type: String, val pointerId: Int, val x: Float, val y: Float, val pressure: Float, val tUs: Long)
 @Serializable data class InputKey(val events: List<KeyEvt>) : ClientMsg
 @Serializable data class KeyEvt(val type: String, val keyCode: Int, val tUs: Long)
-@Serializable data class Config(val width: Int, val height: Int, val fps: Int, val bitrateKbps: Int, val keyframeIntervalSec: Int = 2) : ClientMsg
+@Serializable data class Config(val width: Int, val height: Int, val fps: Int, val bitrateKbps: Int, val keyframeIntervalSec: Int = 2, val codec: String = "jpeg") : ClientMsg
 @Serializable data object Ping : ClientMsg
 @Serializable data class Disconnect(val reason: String, val message: String? = null) : ClientMsg
 
@@ -19,7 +19,7 @@ sealed interface ClientMsg
 sealed interface ServerMsg
 
 @Serializable data class HelloAck(val status: String, val sessionId: String? = null, val pairingToken: String? = null, val config: Config? = null) : ServerMsg
-@Serializable data class ConfigMsg(val width: Int, val height: Int, val fps: Int, val bitrateKbps: Int, val keyframeIntervalSec: Int = 2) : ServerMsg
+@Serializable data class ConfigMsg(val width: Int, val height: Int, val fps: Int, val bitrateKbps: Int, val keyframeIntervalSec: Int = 2, val codec: String = "jpeg") : ServerMsg
 @Serializable data class ErrorMsg(val code: String, val message: String) : ServerMsg
 @Serializable data object Pong : ServerMsg
 

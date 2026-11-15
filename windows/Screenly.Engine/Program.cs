@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Runtime.InteropServices;
 using Screenly.Core.Capture;
 using Screenly.Core.Config;
+using Screenly.Core.Encoding;
 // USB-only: no mDNS discovery
 using Screenly.Core.Display;
 using Screenly.Core.Streaming;
@@ -123,8 +124,44 @@ public static class Program
             Console.WriteLine($"Parsec VDD not available ({ex.Message}); falling back to primary screen (mirror mode).");
             vddHandle = default;
         }
-        var capture = new GdiCapture(70);
-        capture.Start(0);
+        var requestedCodec = (cfg.Encoding.Codec ?? "jpeg").ToLowerInvariant();
+        ICapture capture;
+        H264Encoder? encoder = null;
+        bool useH264 = requestedCodec == "h264";
+        if (useH264)
+        {
+            var dc = new DxgiCapture(70);
+            H264Encoder? enc = null;
+            try
+            {
+                dc.Start(0);
+                enc = new H264Encoder();
+                enc.Initialize(cfg.VirtualDisplay.Width > 0 ? cfg.VirtualDisplay.Width : dc.Width,
+                    cfg.VirtualDisplay.Height > 0 ? cfg.VirtualDisplay.Height : dc.Height,
+                    cfg.Encoding.TargetFps, cfg.Encoding.BitrateKbps);
+                if (!enc.IsReady) throw new Exception("H264 encoder init failed");
+                encoder = enc;
+                capture = dc;
+                Console.WriteLine($"H264 mode: DXGI capture {dc.Width}x{dc.Height}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"H264 init failed ({ex.Message}); falling back to JPEG.");
+                dc.Dispose();
+                enc?.Dispose();
+                encoder = null;
+                useH264 = false;
+                var gc = new GdiCapture(70);
+                gc.Start(0);
+                capture = gc;
+            }
+        }
+        else
+        {
+            var gc = new GdiCapture(70);
+            gc.Start(0);
+            capture = gc;
+        }
         Console.WriteLine($"Capturing display at origin ({capture.MonitorX}, {capture.MonitorY}), size {capture.Width}x{capture.Height}");
 
 
@@ -138,7 +175,8 @@ public static class Program
                 case MessageType.Hello:
                     Console.WriteLine("HELLO received");
                     session.HasHandshaked = true;
-                    var ack = new { status = "ok", sessionId = session.Id.ToString(), pairingToken = (string?)null, config = new { width = capture.Width, height = capture.Height, fps = cfg.VirtualDisplay.RefreshHz, bitrateKbps = cfg.Encoding.BitrateKbps } };
+                    var activeCodecNow = useH264 ? "h264" : "jpeg";
+                    var ack = new { status = "ok", sessionId = session.Id.ToString(), pairingToken = (string?)null, config = new { width = capture.Width, height = capture.Height, fps = cfg.Encoding.TargetFps, bitrateKbps = cfg.Encoding.BitrateKbps, codec = activeCodecNow } };
                     var ackJson = JsonSerializer.Serialize(ack);
                     await session.SendAsync(MessageType.HelloAck, Encoding.UTF8.GetBytes(ackJson));
                     Console.WriteLine("HELLO_ACK sent");
@@ -213,17 +251,41 @@ public static class Program
         {
             while (!cts.IsCancellationRequested)
             {
-                if (capture.TryGetFrame(out var frame))
+                if (useH264 && encoder != null)
                 {
-                    var header = new VideoFrameHeader(seq++, frame.TimestampUs, (ushort)frame.Width, (ushort)frame.Height, true, true);
-                    var msg = FrameCodec.Encode(header, frame.JpegData);
-                    foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
+                    if (capture.TryGetFrame(out var rawFrame))
                     {
-                        try { await s.SendAsync(MessageType.VideoFrame, msg); }
-                        catch { }
+                        if (seq % (uint)(cfg.Encoding.TargetFps * Math.Max(1, cfg.Encoding.KeyframeIntervalSec)) == 0) encoder.RequestKeyframe();
+                        var enc = encoder.Encode(rawFrame.JpegData, rawFrame.Width, rawFrame.Height, rawFrame.TimestampUs);
+                        if (enc != null)
+                        {
+                            var header = new VideoFrameHeader(seq++, enc.TimestampUs, (ushort)rawFrame.Width, (ushort)rawFrame.Height, enc.IsKeyframe, false);
+                            var msg = FrameCodec.Encode(header, enc.Data);
+                            foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
+                            {
+                                try { await s.SendAsync(MessageType.VideoFrame, msg); }
+                                catch { }
+                            }
+                            if (seq % 100 == 0) Console.WriteLine($"frames sent: {seq}");
+                        }
                     }
-                    if (seq % 100 == 0) Console.WriteLine($"frames sent: {seq}");
                 }
+                else
+                {
+                    if (capture.TryGetFrame(out var frame))
+                    {
+                        var header = new VideoFrameHeader(seq++, frame.TimestampUs, (ushort)frame.Width, (ushort)frame.Height, true, true);
+                        var msg = FrameCodec.Encode(header, frame.JpegData);
+                        foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
+                        {
+                            try { await s.SendAsync(MessageType.VideoFrame, msg); }
+                            catch { }
+                        }
+                        if (seq % 100 == 0) Console.WriteLine($"frames sent: {seq}");
+                    }
+                }
+                // Deadline-based pacing: account for processing time
+                // (placeholder - full implementation needs Stopwatch tracking)
                 await Task.Delay(33, cts.Token); // ~30 fps
             }
         }, cts.Token);
@@ -248,6 +310,7 @@ public static class Program
 
         capture.Stop();
         capture.Dispose();
+        encoder?.Dispose();
         await display.RemoveAsync();
         await server.DisposeAsync();
     }

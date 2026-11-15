@@ -12,6 +12,10 @@ public interface ICapture : IDisposable
     void Start(int displayId);
     bool TryGetFrame(out CapturedFrame frame);
     void Stop();
+    int MonitorX { get; }
+    int MonitorY { get; }
+    int Width { get; }
+    int Height { get; }
 }
 
 public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
