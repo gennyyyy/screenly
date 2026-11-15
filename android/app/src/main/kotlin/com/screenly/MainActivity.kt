@@ -50,6 +50,17 @@ fun ScreenlyApp(activity: Activity) {
 
     LaunchedEffect(Unit) {
         scope.launch { discoverHosts(activity).collect { hosts = it } }
+        // Auto-connect for testing (USB tunnel)
+        scope.launch {
+            kotlinx.coroutines.delay(2000)
+            if (!connected) {
+                android.util.Log.d("MainActivity", "auto-connecting to 127.0.0.1")
+                if (client.connect("127.0.0.1", 7543)) {
+                    val dm = activity.resources.displayMetrics
+                    client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = dm.widthPixels, screenHeight = dm.heightPixels, densityDpi = dm.densityDpi))
+                }
+            }
+        }
         scope.launch {
             client.events.collect { ev ->
                 when (ev) {

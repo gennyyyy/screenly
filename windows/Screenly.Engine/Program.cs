@@ -14,8 +14,20 @@ public static class Program
     {
         var cfg = ConfigStore.Load();
         using var display = new DisplayManager(new ParsecVddDisplay());
-        // Use GDI capture (primary screen) for now; Parsec VDD virtual display when wired.
-        var capture = new GdiCapture(cfg.Encoding.BitrateKbps > 0 ? 70 : 70);
+        DisplayHandle vddHandle;
+        try
+        {
+            vddHandle = await display.CreateAsync(cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height, cfg.VirtualDisplay.RefreshHz);
+            Console.WriteLine($"Virtual display created (handle {vddHandle.Id})");
+            // Give Windows a moment to register the new monitor
+            await Task.Delay(1500);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"Parsec VDD not available ({ex.Message}); falling back to primary screen (mirror mode).");
+            vddHandle = default;
+        }
+        var capture = new GdiCapture(70);
         capture.Start(0);
 
         using var mdns = new MdnsBroadcaster(cfg.Port);
