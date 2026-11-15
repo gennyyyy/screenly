@@ -44,10 +44,12 @@ public sealed class DxgiCapture : ICapture
     private IntPtr _hdcSrc = IntPtr.Zero;
     private int _width, _height;
     private int _monitorX, _monitorY;
+    private bool _monitorFound;
     private bool _running;
 
     public int MonitorX => _monitorX;
     public int MonitorY => _monitorY;
+    public bool MonitorFound => _monitorFound;
     public int Width => _width;
     public int Height => _height;
 
@@ -79,6 +81,12 @@ public sealed class DxgiCapture : ICapture
         {
             _width = 1920; _height = 1080;
         }
+        if (!_monitorFound)
+        {
+            Console.WriteLine($"[DxgiCapture] monitor not found for device '{_deviceName ?? "<null>"}'; defaulting to (0,0)");
+            _monitorX = 0;
+            _monitorY = 0;
+        }
         _running = true;
     }
 
@@ -101,9 +109,12 @@ public sealed class DxgiCapture : ICapture
             bmi.bmiHeader.biBitCount = 32;
             bmi.bmiHeader.biCompression = BI_RGB;
 
-            var hdcMem = CreateCompatibleDC(hdcSrc);
-            var hBmp = CreateDIBSection(hdcSrc, ref bmi, DIB_RGB_COLORS, out var bits, IntPtr.Zero, 0);
-            if (hBmp == IntPtr.Zero || bits == IntPtr.Zero) { DeleteDC(hdcMem); return false; }
+            // Memory surface must come from the primary screen DC: DrawIconEx silently
+            // draws nothing when the surface is created from a secondary display DC.
+            var screenDc = GetDCWrapper();
+            var hdcMem = CreateCompatibleDC(screenDc);
+            var hBmp = CreateDIBSection(screenDc, ref bmi, DIB_RGB_COLORS, out var bits, IntPtr.Zero, 0);
+            if (hBmp == IntPtr.Zero || bits == IntPtr.Zero) { DeleteDC(hdcMem); ReleaseDCWrapper(screenDc); return false; }
             SelectObject(hdcMem, hBmp);
             BitBlt(hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
 
@@ -115,6 +126,7 @@ public sealed class DxgiCapture : ICapture
 
             DeleteObject(hBmp);
             DeleteDC(hdcMem);
+            ReleaseDCWrapper(screenDc);
             if (created) ReleaseDCWrapper(hdcSrc);
 
             frame = new CapturedFrame(data, _width, _height, (ulong)DateTime.UtcNow.Ticks);
@@ -135,10 +147,11 @@ public sealed class DxgiCapture : ICapture
     private bool MonitorCallback(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData)
     {
         var mi = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
-        if (GetMonitorInfo(hMonitor, ref mi) && (_deviceName == null || mi.szDevice == _deviceName))
+        if (GetMonitorInfo(hMonitor, ref mi) && _deviceName != null && mi.szDevice == _deviceName)
         {
             _monitorX = mi.rcMonitor.left;
             _monitorY = mi.rcMonitor.top;
+            _monitorFound = true;
         }
         return true;
     }

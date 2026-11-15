@@ -96,10 +96,12 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
     private int _encH;
     private int _monitorX;
     private int _monitorY;
+    private bool _monitorFound;
     private bool _running;
     private bool _dbgSave;
     public int MonitorX => _monitorX;
     public int MonitorY => _monitorY;
+    public bool MonitorFound => _monitorFound;
     public int Width => _width;
     public int Height => _height;
     private readonly int _quality;
@@ -144,6 +146,12 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
             _width = GetSystemMetrics(SM_CXSCREEN);
             _height = GetSystemMetrics(SM_CYSCREEN);
         }
+        if (!_monitorFound)
+        {
+            Console.WriteLine($"[GdiCapture] monitor not found for device '{_deviceName ?? "<null>"}'; defaulting to (0,0)");
+            _monitorX = 0;
+            _monitorY = 0;
+        }
         _running = true;
     }
 
@@ -159,8 +167,11 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
             if (_hdcSrc != IntPtr.Zero) hdcSrc = _hdcSrc;
             else { hdcSrc = GetDC(IntPtr.Zero); createdDC = true; }
 
-            var hdcMem = CreateCompatibleDC(hdcSrc);
-            var hBitmap = CreateCompatibleBitmap(hdcSrc, _width, _height);
+            // Memory surface must come from the primary screen DC: DrawIconEx silently
+            // draws nothing when the bitmap is created from a secondary display DC.
+            var screenDc = GetDC(IntPtr.Zero);
+            var hdcMem = CreateCompatibleDC(screenDc);
+            var hBitmap = CreateCompatibleBitmap(screenDc, _width, _height);
             SelectObject(hdcMem, hBitmap);
             BitBlt(hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
 
@@ -176,6 +187,7 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
 
             DeleteObject(hBitmap);
             DeleteDC(hdcMem);
+            ReleaseDC(IntPtr.Zero, screenDc);
             if (createdDC) ReleaseDC(IntPtr.Zero, hdcSrc);
 
             frame = new CapturedFrame(ms.ToArray(), _width, _height, (ulong)DateTime.UtcNow.Ticks);
@@ -188,10 +200,11 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
     private bool MonitorCallback(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData)
     {
         var mi = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
-        if (GetMonitorInfo(hMonitor, ref mi) && mi.szDevice == _deviceName)
+        if (GetMonitorInfo(hMonitor, ref mi) && _deviceName != null && mi.szDevice == _deviceName)
         {
             _monitorX = mi.rcMonitor.left;
             _monitorY = mi.rcMonitor.top;
+            _monitorFound = true;
         }
         return true;
     }
