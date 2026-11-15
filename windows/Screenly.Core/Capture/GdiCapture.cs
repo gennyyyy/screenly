@@ -29,6 +29,44 @@ public sealed class GdiCapture : ICapture
     [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hwnd);
     [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
     [DllImport("user32.dll")] private static extern int GetSystemMetrics(int nIndex);
+    [DllImport("user32.dll")] private static extern bool GetCursorInfo(ref CURSORINFO pci);
+    [DllImport("user32.dll")] private static extern bool DrawIconEx(IntPtr hdc, int xLeft, int yTop, IntPtr hIcon, int cxWidth, int cyHeight, uint istepIfAniCur, IntPtr hbrFlickerFreeDraw, uint diFlags);
+    [DllImport("user32.dll")] private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
+    [DllImport("user32.dll", CharSet = CharSet.Auto)] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
+
+    private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int left, top, right, bottom; }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Auto)]
+    private struct MONITORINFOEX
+    {
+        public int cbSize;
+        public RECT rcMonitor;
+        public RECT rcWork;
+        public uint dwFlags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct CURSORINFO
+    {
+        public int cbSize;
+        public int flags;
+        public IntPtr hCursor;
+        public POINT ptScreenPos;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT
+    {
+        public int x;
+        public int y;
+    }
+
+    private const int CURSOR_SHOWING = 0x00000001;
+    private const uint DI_NORMAL = 0x0003;
     [DllImport("user32.dll", CharSet = CharSet.Auto)] private static extern bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
 
     private const int SM_CXSCREEN = 0;
@@ -54,6 +92,8 @@ public sealed class GdiCapture : ICapture
     private IntPtr _hdcSrc = IntPtr.Zero;
     private int _width;
     private int _height;
+    private int _monitorX;
+    private int _monitorY;
     private bool _running;
     private readonly int _quality;
 
@@ -80,6 +120,8 @@ public sealed class GdiCapture : ICapture
                 _height = GetDeviceCaps(_hdcSrc, VERTRES);
                 if (_width <= 0) _width = 1920;
                 if (_height <= 0) _height = 1080;
+                // Find monitor origin
+                EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, MonitorCallback, IntPtr.Zero);
             }
         }
 
@@ -115,6 +157,15 @@ public sealed class GdiCapture : ICapture
             SelectObject(hdcMem, hBitmap);
             BitBlt(hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
 
+            // Composite cursor
+            var ci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
+            if (GetCursorInfo(ref ci) && (ci.flags & CURSOR_SHOWING) != 0 && ci.hCursor != IntPtr.Zero)
+            {
+                int cx = ci.ptScreenPos.x - _monitorX;
+                int cy = ci.ptScreenPos.y - _monitorY;
+                DrawIconEx(hdcMem, cx, cy, ci.hCursor, 0, 0, 0, IntPtr.Zero, DI_NORMAL);
+            }
+
             using var bmp = Image.FromHbitmap(hBitmap);
             using var ms = new MemoryStream();
             var jpegCodec = ImageCodecInfo.GetImageEncoders().First(c => c.MimeType == "image/jpeg");
@@ -130,6 +181,17 @@ public sealed class GdiCapture : ICapture
             return true;
         }
         catch { return false; }
+    }
+
+    private bool MonitorCallback(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData)
+    {
+        var mi = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
+        if (GetMonitorInfo(hMonitor, ref mi) && mi.szDevice == _deviceName)
+        {
+            _monitorX = mi.rcMonitor.left;
+            _monitorY = mi.rcMonitor.top;
+        }
+        return true;
     }
 
     public void Stop() => _running = false;
