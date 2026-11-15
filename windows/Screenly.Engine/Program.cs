@@ -198,26 +198,63 @@ public static class Program
         };
         server.Start();
         Console.WriteLine($"listening on port {cfg.Port}");
-        // Auto-set up USB reverse tunnel if adb is available (so Android connects over USB with no manual step)
-        try
+        var cts = new CancellationTokenSource();
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+        // Auto-set up USB reverse tunnel if adb is available (bounded, truthful, retry)
+        _ = Task.Run(async () =>
         {
             var adb = FindAdb();
-            if (adb != null)
+            if (adb == null) { Console.WriteLine("ADB not found; skipping USB tunnel setup"); return; }
+            int attempt = 0;
+            while (!cts.IsCancellationRequested && attempt < 10)
             {
-                var psi = new System.Diagnostics.ProcessStartInfo(adb, "reverse tcp:7543 tcp:7543") { CreateNoWindow = true, UseShellExecute = false, RedirectStandardError = true };
-                using var proc = System.Diagnostics.Process.Start(psi);
-                proc?.WaitForExit(5000);
-                var err = proc?.StandardError.ReadToEnd();
-                if (!string.IsNullOrWhiteSpace(err)) Console.WriteLine($"adb: {err.Trim()}");
-                else Console.WriteLine("adb reverse tcp:7543 tcp:7543 configured");
+                try
+                {
+                    var psi = new System.Diagnostics.ProcessStartInfo(adb, $"reverse tcp:7543 tcp:{cfg.Port}")
+                    {
+                        CreateNoWindow = true, UseShellExecute = false,
+                        RedirectStandardOutput = true, RedirectStandardError = true,
+                    };
+                    using var proc = System.Diagnostics.Process.Start(psi);
+                    if (proc == null) { attempt++; await Task.Delay(2000, cts.Token); continue; }
+                    var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+                    var stderrTask = proc.StandardError.ReadToEndAsync();
+                    bool exited = proc.WaitForExit(5000);
+                    if (!exited)
+                    {
+                        try { proc.Kill(); } catch { }
+                        Console.WriteLine("ADB reverse timed out");
+                        attempt++;
+                        await Task.Delay(2000, cts.Token);
+                        continue;
+                    }
+                    await Task.WhenAll(stdoutTask, stderrTask);
+                    var stdout = stdoutTask.Result;
+                    var stderr = stderrTask.Result;
+                    if (proc.ExitCode != 0)
+                    {
+                        Console.WriteLine($"ADB reverse failed (exit {proc.ExitCode}): {stderr.Trim()}");
+                        attempt++;
+                        await Task.Delay(2000, cts.Token);
+                        continue;
+                    }
+                    Console.WriteLine($"ADB reverse configured: device:7543 -> host:{cfg.Port}");
+                    // Success - check periodically
+                    await Task.Delay(10000, cts.Token);
+                    attempt = 0; // reset on success
+                }
+                catch (OperationCanceledException) { break; }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"ADB error: {ex.Message}");
+                    attempt++;
+                    try { await Task.Delay(2000, cts.Token); } catch { break; }
+                }
             }
-        }
-        catch { }
+        }, cts.Token);
 
         // Capture + stream loop (~15 fps)
         uint seq = 0;
-        var cts = new CancellationTokenSource();
-        Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
         // Cursor tracking loop (~30 Hz) - sends cursor position separately
         _ = Task.Run(async () =>
         {

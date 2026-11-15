@@ -20,16 +20,17 @@ sealed interface ServerEvent {
 }
 
 class ScreenlyClient {
-    private var socket: Socket? = null
-    private var input: DataInputStream? = null
-    private var output: DataOutputStream? = null
+    @Volatile private var socket: Socket? = null
+    @Volatile private var input: DataInputStream? = null
+    @Volatile private var output: DataOutputStream? = null
+    private var receiveJob: Job? = null
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _events = MutableSharedFlow<ServerEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<ServerEvent> = _events
 
     suspend fun connect(host: String, port: Int): Boolean = withContext(Dispatchers.IO) {
-        close()
+        close() // close previous connection
         try {
             val s = Socket()
             s.tcpNoDelay = true
@@ -37,7 +38,8 @@ class ScreenlyClient {
             socket = s
             input = DataInputStream(s.getInputStream())
             output = DataOutputStream(s.getOutputStream())
-            scope.launch { receiveLoop() }
+            // Track receive job per connection
+            receiveJob = scope.launch { receiveLoop(s) }
             true
         } catch (e: Exception) {
             android.util.Log.e("ScreenlyClient", "connect failed to $host:$port", e)
@@ -45,7 +47,7 @@ class ScreenlyClient {
         }
     }
 
-    private suspend fun receiveLoop() {
+    private suspend fun receiveLoop(connSocket: Socket) {
         try {
             val inp = input ?: return
             while (true) {
@@ -57,13 +59,19 @@ class ScreenlyClient {
                 val payload = ByteArray(len - 1)
                 if (payload.isNotEmpty()) inp.readFully(payload)
                 // Frame-skip: if more data pending, discard this frame to always show latest
-                if (type == Protocol.VIDEO_FRAME && (socket?.getInputStream()?.available() ?: 0) > 0) continue
+                if (type == Protocol.VIDEO_FRAME && (connSocket.getInputStream()?.available() ?: 0) > 0) continue
                 dispatch(type, payload)
             }
         } catch (e: Exception) {
             android.util.Log.e("ScreenlyClient", "receive loop error", e)
-            try { socket?.close() } catch (_: Exception) { }
-            _events.tryEmit(ServerEvent.Disconnected)
+            // Only close this connection's socket, not a newer one
+            if (socket === connSocket) {
+                try { connSocket.close() } catch (_: Exception) { }
+                socket = null
+                input = null
+                output = null
+                _events.tryEmit(ServerEvent.Disconnected)
+            }
         }
     }
 
@@ -91,6 +99,10 @@ class ScreenlyClient {
             Protocol.ERROR -> {
                 val e = Protocol.json.decodeFromString<ErrorMsg>(String(payload))
                 _events.tryEmit(ServerEvent.Errored(e))
+            }
+            Protocol.PING -> {
+                // Answer Windows PING with PONG
+                scope.launch { send(Ping) }
             }
             Protocol.PONG -> _events.tryEmit(ServerEvent.Ponged)
             Protocol.CURSOR_POS -> {
@@ -130,6 +142,8 @@ class ScreenlyClient {
     }
 
     fun close() {
+        try { receiveJob?.cancel() } catch (_: Exception) { }
+        receiveJob = null
         try { input?.close() } catch (_: Exception) { }
         try { output?.close() } catch (_: Exception) { }
         try { socket?.close() } catch (_: Exception) { }

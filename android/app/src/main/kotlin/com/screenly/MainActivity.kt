@@ -56,9 +56,16 @@ fun ScreenlyApp(activity: Activity) {
                     if (!firstAttempt) kotlinx.coroutines.delay(2000)
                     firstAttempt = false
                     val host = "127.0.0.1"
-                    if (client.connect(host, 7543)) {
+                    // Bounded handshake: connect with 5s timeout, wait for HELLO_ACK
+                    val connected_ok = client.connect(host, 7543)
+                    if (connected_ok) {
                         val dm = activity.resources.displayMetrics
                         client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = dm.widthPixels, screenHeight = dm.heightPixels, densityDpi = dm.densityDpi))
+                        // Wait for handshake with timeout
+                        kotlinx.coroutines.withTimeoutOrNull(5000) {
+                            // Wait for connected to become true
+                            while (!connected) kotlinx.coroutines.delay(100)
+                        }
                     }
                 } else {
                     kotlinx.coroutines.delay(1000)

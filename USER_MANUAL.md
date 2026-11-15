@@ -90,7 +90,7 @@ Config is stored in `%APPDATA%\Screenly\config.json`.
 
 | Problem | Solution |
 |---|---|
-| Phone stuck on "Searching for hosts on LAN" | Use **Manual IP** (Option B) or USB (Option C). mDNS may be blocked by your router. |
+| Phone won't connect | Ensure USB debugging is enabled and `adb reverse tcp:7543 tcp:7543` was run on the PC. |
 | "Connect" button doesn't respond | Dismiss the keyboard (Back button) first, then tap Connect. |
 | Connection refused / ENETUNREACH | Ensure phone and PC are on the same network. Check firewall (port 7543). |
 | Black screen on phone | The engine may still be starting. Wait 5 seconds and reconnect. |

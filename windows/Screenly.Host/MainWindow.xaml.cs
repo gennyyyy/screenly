@@ -34,7 +34,20 @@ public partial class MainWindow : System.Windows.Window
 
     private void ShowInfo()
     {
-        InfoText.Text = "Screenly engine is running (USB mode).\n\nOn your PC run once:\n  adb reverse tcp:7543 tcp:7543\n\nThen open the Screenly app on your phone - it auto-connects over USB.\n\nPort: 7543";
+        // Wait briefly for engine to start listening
+        for (int i = 0; i < 20; i++)
+        {
+            try
+            {
+                using var c = new System.Net.Sockets.TcpClient();
+                c.Connect("127.0.0.1", 7543);
+                c.Close();
+                InfoText.Text = "Screenly engine is running (USB mode).\n\nOn your PC run once:\n  adb reverse tcp:7543 tcp:7543\n\nThen open the Screenly app on your phone - it auto-connects over USB.\n\nPort: 7543";
+                return;
+            }
+            catch { System.Threading.Thread.Sleep(500); }
+        }
+        InfoText.Text = "Engine may not have started. Check that Screenly.Engine.exe is running.\nPort: 7543";
     }
 
     private void ShowWindow()

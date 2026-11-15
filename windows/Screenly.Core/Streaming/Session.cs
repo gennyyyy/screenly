@@ -10,14 +10,8 @@ public sealed class Session : IAsyncDisposable
     public TcpClient Client { get; }
     public NetworkStream Stream { get; }
     public bool HasHandshaked { get; set; }
+    public DateTime LastPong { get; set; } = DateTime.UtcNow;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
-    private readonly Channel<byte[]> _frameChannel = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(1)
-    {
-        FullMode = BoundedChannelFullMode.DropOldest,
-    });
-    public ChannelReader<byte[]> FrameReader => _frameChannel.Reader;
-    public ChannelWriter<byte[]> FrameWriter => _frameChannel.Writer;
-
     public Session(TcpClient client)
     {
         Client = client;
@@ -72,7 +66,7 @@ public sealed class StreamServer : IAsyncDisposable
     public void Start()
     {
         _cts = new CancellationTokenSource();
-        _listener = new TcpListener(IPAddress.Any, Port);
+        _listener = new TcpListener(IPAddress.Loopback, Port);
         _listener.Start();
         _ = AcceptLoopAsync(_cts.Token);
     }
@@ -105,6 +99,12 @@ public sealed class StreamServer : IAsyncDisposable
                 while (!pingCts.IsCancellationRequested)
                 {
                     await Task.Delay(5000, pingCts.Token);
+                    // Check PONG timeout (10s)
+                    if ((DateTime.UtcNow - session.LastPong).TotalSeconds > 10)
+                    {
+                        Console.WriteLine($"Session {session.Id}: PONG timeout, disconnecting");
+                        break;
+                    }
                     try { await session.SendAsync(MessageType.Ping, Array.Empty<byte>(), pingCts.Token); }
                     catch { break; }
                 }
@@ -112,7 +112,7 @@ public sealed class StreamServer : IAsyncDisposable
 
             await session.ReceiveLoopAsync(async (type, payload) =>
             {
-                if (type == MessageType.Pong) return;
+                if (type == MessageType.Pong) { session.LastPong = DateTime.UtcNow; return; }
                 if (MessageHandler != null) await MessageHandler(session, type, payload);
             }, ct);
         }
