@@ -5,4 +5,7 @@
     <Nullable>enable</Nullable>
     <RootNamespace>Screenly.Core</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+  </ItemGroup>
 </Project>

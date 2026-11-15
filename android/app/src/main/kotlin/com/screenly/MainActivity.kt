@@ -8,6 +8,8 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.DisposableEffect
@@ -58,8 +60,20 @@ fun ScreenlyApp(activity: Activity) {
                     }
                     is ServerEvent.Frame -> {
                         if (ev.w != streamW || ev.h != streamH) { streamW = ev.w; streamH = ev.h }
-                        decoder.configure(ev.w, ev.h)
-                        decoder.decode(ev.nal, ev.tsUs, ev.keyframe)
+                        if (ev.isJpeg) {
+                            val bmp = android.graphics.BitmapFactory.decodeByteArray(ev.nal, 0, ev.nal.size)
+                            if (bmp != null) {
+                                val canvas = try { surfaceView.holder.lockCanvas() } catch (_: Exception) { null }
+                                if (canvas != null) {
+                                    canvas.drawBitmap(bmp, null, android.graphics.Rect(0, 0, surfaceView.width.coerceAtLeast(1), surfaceView.height.coerceAtLeast(1)), null)
+                                    surfaceView.holder.unlockCanvasAndPost(canvas)
+                                }
+                                bmp.recycle()
+                            }
+                        } else {
+                            decoder.configure(ev.w, ev.h)
+                            decoder.decode(ev.nal, ev.tsUs, ev.keyframe)
+                        }
                     }
                     is ServerEvent.Disconnected -> {
                         connected = false
@@ -74,7 +88,7 @@ fun ScreenlyApp(activity: Activity) {
 
     MaterialTheme {
         if (!connected) {
-            Column(Modifier.fillMaxSize().padding(16.dp)) {
+            Column(Modifier.fillMaxSize().padding(16.dp).verticalScroll(rememberScrollState()).imePadding()) {
                 Text("Screenly", style = MaterialTheme.typography.headlineMedium)
                 Spacer(Modifier.height(8.dp))
                 hosts.forEach { h ->

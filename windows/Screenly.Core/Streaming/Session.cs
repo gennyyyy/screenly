@@ -9,6 +9,7 @@ public sealed class Session : IAsyncDisposable
     public Guid Id { get; } = Guid.NewGuid();
     public TcpClient Client { get; }
     public NetworkStream Stream { get; }
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
     private readonly Channel<byte[]> _frameChannel = Channel.CreateBounded<byte[]>(new BoundedChannelOptions(1)
     {
         FullMode = BoundedChannelFullMode.DropOldest,
@@ -22,8 +23,12 @@ public sealed class Session : IAsyncDisposable
         Stream = client.GetStream();
     }
 
-    public async Task SendAsync(MessageType type, byte[] payload, CancellationToken ct = default) =>
-        await Protocol.WriteMessageAsync(Stream, type, payload, ct);
+    public async Task SendAsync(MessageType type, byte[] payload, CancellationToken ct = default)
+    {
+        await _writeLock.WaitAsync(ct);
+        try { await Protocol.WriteMessageAsync(Stream, type, payload, ct); }
+        finally { _writeLock.Release(); }
+    }
 
     public Task ReceiveLoopAsync(Func<MessageType, byte[], Task> handler, CancellationToken ct = default) =>
         Task.Run(async () =>
@@ -43,6 +48,7 @@ public sealed class Session : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         try { Client.Close(); } catch { }
+        _writeLock.Dispose();
         await Task.CompletedTask;
     }
 }

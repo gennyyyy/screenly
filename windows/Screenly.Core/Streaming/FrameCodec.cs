@@ -2,7 +2,7 @@ using System.Buffers.Binary;
 
 namespace Screenly.Core.Streaming;
 
-public readonly record struct VideoFrameHeader(uint Seq, ulong TimestampUs, ushort Width, ushort Height, bool IsKeyframe);
+public readonly record struct VideoFrameHeader(uint Seq, ulong TimestampUs, ushort Width, ushort Height, bool IsKeyframe, bool IsJpeg = false);
 
 public static class FrameCodec
 {
@@ -15,7 +15,9 @@ public static class FrameCodec
         BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(4), h.TimestampUs);
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(12), h.Width);
         BinaryPrimitives.WriteUInt16LittleEndian(buf.AsSpan(14), h.Height);
-        buf[16] = h.IsKeyframe ? (byte)1 : (byte)0;
+        byte flags = h.IsKeyframe ? (byte)1 : (byte)0;
+        if (h.IsJpeg) flags |= 0x02;
+        buf[16] = flags;
         nalData.CopyTo(buf.AsSpan(HeaderSize));
         return buf;
     }
@@ -28,7 +30,8 @@ public static class FrameCodec
             BinaryPrimitives.ReadUInt64LittleEndian(data.Slice(4)),
             BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(12)),
             BinaryPrimitives.ReadUInt16LittleEndian(data.Slice(14)),
-            data[16] == 1);
+            (data[16] & 0x01) == 1,
+            (data[16] & 0x02) != 0);
         var nal = data.Slice(HeaderSize).ToArray();
         return (h, nal);
     }

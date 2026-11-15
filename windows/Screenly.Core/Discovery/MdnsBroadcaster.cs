@@ -30,6 +30,7 @@ public sealed class MdnsBroadcaster : IDisposable
     public void Start()
     {
         _running = true;
+        Console.WriteLine("mDNS advertising");
         _udp = new UdpClient();
         _udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
         _udp.Client.Bind(new IPEndPoint(IPAddress.Any, Port));

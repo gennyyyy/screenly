@@ -11,7 +11,7 @@ import java.nio.ByteOrder
 
 sealed interface ServerEvent {
     data class HelloAcked(val ack: HelloAck) : ServerEvent
-    data class Frame(val seq: Int, val tsUs: Long, val w: Int, val h: Int, val keyframe: Boolean, val nal: ByteArray) : ServerEvent
+    data class Frame(val seq: Int, val tsUs: Long, val w: Int, val h: Int, val keyframe: Boolean, val isJpeg: Boolean, val nal: ByteArray) : ServerEvent
     data class Configured(val c: ConfigMsg) : ServerEvent
     data class Errored(val e: ErrorMsg) : ServerEvent
     data object Ponged : ServerEvent
@@ -35,10 +35,10 @@ class ScreenlyClient {
             socket = s
             input = DataInputStream(s.getInputStream())
             output = DataOutputStream(s.getOutputStream())
-            // receive loop
             scope.launch { receiveLoop() }
             true
         } catch (e: Exception) {
+            android.util.Log.e("ScreenlyClient", "connect failed to $host:$port", e)
             false
         }
     }
@@ -57,6 +57,7 @@ class ScreenlyClient {
                 dispatch(type, payload)
             }
         } catch (e: Exception) {
+            android.util.Log.e("ScreenlyClient", "receive loop error", e)
             try { socket?.close() } catch (_: Exception) { }
             _events.tryEmit(ServerEvent.Disconnected)
         }
@@ -77,7 +78,7 @@ class ScreenlyClient {
                 val flags = bb.get().toInt()
                 val nal = ByteArray(bb.remaining())
                 bb.get(nal)
-                _events.tryEmit(ServerEvent.Frame(seq, ts, w, h, (flags and 1) == 1, nal))
+                _events.tryEmit(ServerEvent.Frame(seq, ts, w, h, (flags and 1) == 1, (flags and 2) != 0, nal))
             }
             Protocol.CONFIG -> {
                 val c = Protocol.json.decodeFromString<ConfigMsg>(String(payload))
@@ -91,7 +92,7 @@ class ScreenlyClient {
         }
     }
 
-    fun send(msg: ClientMsg) {
+    suspend fun send(msg: ClientMsg) = withContext(Dispatchers.IO) {
         val (type, bytes) = when (msg) {
             is Hello -> Protocol.HELLO to Protocol.json.encodeToString(Hello.serializer(), msg).toByteArray()
             is InputTouch -> Protocol.INPUT_TOUCH to Protocol.json.encodeToString(InputTouch.serializer(), msg).toByteArray()
@@ -101,7 +102,8 @@ class ScreenlyClient {
             is Disconnect -> Protocol.DISCONNECT to Protocol.json.encodeToString(Disconnect.serializer(), msg).toByteArray()
         }
         try {
-            val out = output ?: return
+            val out = output
+            if (out == null) return@withContext
             synchronized(out) {
                 val lenBuf = ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN)
                 lenBuf.putInt(1 + bytes.size)
@@ -110,7 +112,7 @@ class ScreenlyClient {
                 out.write(bytes)
                 out.flush()
             }
-        } catch (_: Exception) { }
+        } catch (e: Exception) { android.util.Log.e("ScreenlyClient", "send failed", e) }
     }
 
     fun close() {
