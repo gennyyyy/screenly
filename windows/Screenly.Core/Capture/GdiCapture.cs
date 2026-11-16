@@ -79,6 +79,8 @@ public sealed class GdiCapture : ICapture
     private int _height;
     private int _monitorX;
     private int _monitorY;
+    private IntPtr _monitorHandle = IntPtr.Zero;
+    private int _monitorDpi = 96;
     private bool _running;
     public int MonitorX => _monitorX;
     public int MonitorY => _monitorY;
@@ -117,6 +119,7 @@ public sealed class GdiCapture : ICapture
                 if (_width <= 0) _width = 1920;
                 if (_height <= 0) _height = 1080;
                 EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, MonitorCallback, IntPtr.Zero);
+                _monitorDpi = CursorDrawer.GetMonitorDpi(_monitorHandle);
             }
         }
         if (_hdcSrc == IntPtr.Zero)
@@ -147,7 +150,7 @@ public sealed class GdiCapture : ICapture
             BitBlt(hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
 
             // Composite cursor into frame (native Windows cursor design)
-            CursorDrawer.Draw(hdcMem, _monitorX, _monitorY, _width, _height);
+            CursorDrawer.Draw(hdcMem, _monitorX, _monitorY, _width, _height, _monitorDpi);
 
             using var bmp = Image.FromHbitmap(hBitmap);
             using var ms = new MemoryStream();
@@ -174,6 +177,7 @@ public sealed class GdiCapture : ICapture
         {
             _monitorX = mi.rcMonitor.left;
             _monitorY = mi.rcMonitor.top;
+            _monitorHandle = hMonitor;
         }
         return true;
     }

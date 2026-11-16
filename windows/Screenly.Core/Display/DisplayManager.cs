@@ -1,4 +1,5 @@
 using System.Runtime.InteropServices;
+using Microsoft.Win32;
 
 namespace Screenly.Core.Display;
 
@@ -28,6 +29,8 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool DeviceIoControl(IntPtr hDevice, uint dwIoControlCode, IntPtr lpInBuffer, uint nInBufferSize, IntPtr lpOutBuffer, uint nOutBufferSize, out uint lpBytesReturned, ref OVERLAPPED lpOverlapped);
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern bool DeviceIoControl(IntPtr hDevice, uint dwIoControlCode, IntPtr lpInBuffer, uint nInBufferSize, IntPtr lpOutBuffer, uint nOutBufferSize, out uint lpBytesReturned, IntPtr lpOverlapped);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool GetOverlappedResultEx(IntPtr hFile, ref OVERLAPPED lpOverlapped, out uint lpNumberOfBytesTransferred, uint dwMilliseconds, bool bAlertable);
@@ -72,45 +75,54 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
     }
 
     private IntPtr _handle = IntPtr.Zero;
+    private IntPtr _syncHandle = IntPtr.Zero;
     private readonly Dictionary<int, int> _displays = new();
     private int _nextId = 1;
     private Thread? _pingThread;
     private volatile bool _running;
 
-    private IntPtr OpenHandle()
+    private IntPtr OpenHandle(bool overlapped = true)
     {
-        if (_handle != IntPtr.Zero) return _handle;
-
-        var path = @"\\?\ROOT#DISPLAY#0000#{00b41627-04c4-429e-a26e-0265cf50c8fa}";
-        uint flags = FILE_FLAG_OVERLAPPED;
-        var h = CreateFile(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, flags, IntPtr.Zero);
-        if (h != new IntPtr(-1))
+        if (overlapped)
         {
-            _handle = h;
-            return h;
+            if (_handle != IntPtr.Zero) return _handle;
+            var path = @"\\?\ROOT#DISPLAY#0000#{00b41627-04c4-429e-a26e-0265cf50c8fa}";
+            var h = CreateFile(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, IntPtr.Zero);
+            if (h != new IntPtr(-1)) { _handle = h; return h; }
+            return IntPtr.Zero;
         }
+        if (_syncHandle != IntPtr.Zero) return _syncHandle;
+        var spath = @"\\?\ROOT#DISPLAY#0000#{00b41627-04c4-429e-a26e-0265cf50c8fa}";
+        var sh = CreateFile(spath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+        if (sh != new IntPtr(-1)) { _syncHandle = sh; return sh; }
         return IntPtr.Zero;
     }
 
-    // IoControl with overlapped pattern per docs
-    private bool IoControl(uint code, byte[]? inBuf, byte[]? outBuf, uint timeoutMs)
+    // IoControl with overlapped pattern per docs; synchronous=true uses a non-overlapped handle
+    private bool IoControl(uint code, byte[]? inBuf, byte[]? outBuf, uint timeoutMs, int inBufferSize = 32, bool synchronous = false)
     {
-        var h = OpenHandle();
+        if (inBufferSize < 1) inBufferSize = 1;
+        var h = OpenHandle(!synchronous);
         if (h == IntPtr.Zero) return false;
 
-        // Ensure 32-byte input buffer
-        var inBuffer = new byte[32];
-        if (inBuf != null) Buffer.BlockCopy(inBuf, 0, inBuffer, 0, Math.Min(inBuf.Length, 32));
-        var inPtr = Marshal.AllocHGlobal(32);
-        var outPtr = outBuf != null ? Marshal.AllocHGlobal(outBuf.Length) : Marshal.AllocHGlobal(4);
-        var ov = new OVERLAPPED();
+        var inBuffer = new byte[inBufferSize];
+        if (inBuf != null) Buffer.BlockCopy(inBuf, 0, inBuffer, 0, Math.Min(inBuf.Length, inBufferSize));
+        var inPtr = Marshal.AllocHGlobal(inBufferSize);
+        var outPtr = outBuf != null ? Marshal.AllocHGlobal(Math.Max(1, outBuf.Length)) : Marshal.AllocHGlobal(4);
         try
         {
-            Marshal.Copy(inBuffer, 0, inPtr, 32);
+            Marshal.Copy(inBuffer, 0, inPtr, inBufferSize);
             uint returned = 0;
-            // Call DeviceIoControl — ignore sync return
-            DeviceIoControl(h, code, inPtr, 32, outPtr, (uint)(outBuf?.Length ?? 4), out returned, ref ov);
-            // Wait via GetOverlappedResultEx
+            if (synchronous)
+            {
+                bool ok = DeviceIoControl(h, code, inPtr, (uint)inBufferSize, outPtr, (uint)(outBuf?.Length ?? 4), out returned, IntPtr.Zero);
+                if (!ok) return false;
+                if (outBuf != null && returned > 0)
+                    Marshal.Copy(outPtr, outBuf, 0, (int)Math.Min(returned, (uint)outBuf.Length));
+                return true;
+            }
+            var ov = new OVERLAPPED();
+            DeviceIoControl(h, code, inPtr, (uint)inBufferSize, outPtr, (uint)(outBuf?.Length ?? 4), out returned, ref ov);
             if (!GetOverlappedResultEx(h, ref ov, out returned, timeoutMs, false))
             {
                 CancelIoEx(h, ref ov);
@@ -128,57 +140,203 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
         }
     }
 
+    private static string AppDataDir => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Screenly");
+    private static string IndicesPath => Path.Combine(AppDataDir, "vdd-indices.txt");
+    private static string LegacyIndexPath => Path.Combine(AppDataDir, "vdd-index.txt");
+
+    private static void Log(string msg)
+    {
+        try
+        {
+            Directory.CreateDirectory(AppDataDir);
+            File.AppendAllText(Path.Combine(AppDataDir, "engine.log"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {msg}{Environment.NewLine}");
+        }
+        catch { }
+    }
+
+    private void RemovePersistedIndex(int index)
+    {
+        try
+        {
+            if (!File.Exists(IndicesPath)) return;
+            var lines = File.ReadAllLines(IndicesPath).Where(l => int.TryParse(l.Trim(), out var v) && v != index).ToArray();
+            if (lines.Length == 0) File.Delete(IndicesPath);
+            else File.WriteAllLines(IndicesPath, lines);
+        }
+        catch { }
+    }
+
+    public bool EnsureRegistryPreset(int width, int height, int refreshHz)
+    {
+        try
+        {
+            using var baseKey = Registry.LocalMachine.OpenSubKey(@"SOFTWARE\Parsec\vdd", true)
+                ?? Registry.LocalMachine.CreateSubKey(@"SOFTWARE\Parsec\vdd", true);
+            if (baseKey == null)
+            {
+                Log("EnsureRegistryPreset: failed to open/create base key");
+                return false;
+            }
+            int slot = -1;
+            for (int i = 0; i <= 4; i++)
+            {
+                using var sub = baseKey.OpenSubKey(i.ToString());
+                if (sub == null)
+                {
+                    if (slot == -1) slot = i;
+                    continue;
+                }
+                var wVal = sub.GetValue("width") ?? sub.GetValue("w");
+                var hVal = sub.GetValue("height") ?? sub.GetValue("h");
+                var hzVal = sub.GetValue("hz");
+                if (wVal != null && hVal != null && hzVal != null &&
+                    Convert.ToInt32(wVal) == width && Convert.ToInt32(hVal) == height && Convert.ToInt32(hzVal) == refreshHz)
+                {
+                    slot = i;
+                    break;
+                }
+                if ((sub.GetValue("width") == null && sub.GetValue("w") == null) && slot == -1)
+                {
+                    slot = i;
+                }
+            }
+            if (slot == -1) slot = 0;
+            using var key = baseKey.CreateSubKey(slot.ToString(), true);
+            key.SetValue("width", width, RegistryValueKind.DWord);
+            key.SetValue("height", height, RegistryValueKind.DWord);
+            key.SetValue("hz", refreshHz, RegistryValueKind.DWord);
+            key.SetValue("w", width, RegistryValueKind.DWord);
+            key.SetValue("h", height, RegistryValueKind.DWord);
+            Log($"EnsureRegistryPreset: slot {slot} set to {width}x{height}@{refreshHz}Hz success");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Log($"EnsureRegistryPreset: FAILED {ex.Message}");
+            return false;
+        }
+    }
+
+    public int DisplayCount => _displays.Count;
+
     public Task<DisplayHandle> CreateAsync(int width, int height, int refreshHz, CancellationToken ct = default)
     {
         var h = OpenHandle();
         if (h == IntPtr.Zero) throw new InvalidOperationException("Parsec VDD device not found (driver not installed?)");
-        // Clean up stale display from a previous (crashed) run
-        var idxFile = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Screenly", "vdd-index.txt");
+        // Clean up ALL stale displays from previous (crashed) runs
         try
         {
-            if (File.Exists(idxFile))
+            var indices = new List<int>();
+            if (File.Exists(IndicesPath))
             {
-                var oldIdx = int.Parse(File.ReadAllText(idxFile).Trim());
-                // 16-bit big-endian index (per Parsec VDD protocol)
+                foreach (var line in File.ReadAllLines(IndicesPath))
+                    if (int.TryParse(line.Trim(), out var v)) indices.Add(v);
+            }
+            if (File.Exists(LegacyIndexPath))
+            {
+                if (int.TryParse(File.ReadAllText(LegacyIndexPath).Trim(), out var v)) indices.Add(v);
+            }
+            var remaining = new List<int>(indices.Distinct());
+            foreach (var oldIdx in indices.Distinct().ToList())
+            {
+                bool removed = false;
                 var buf = new byte[32];
+                // official 16-bit big-endian index
                 buf[0] = (byte)((oldIdx >> 8) & 0xFF);
                 buf[1] = (byte)(oldIdx & 0xFF);
-                IoControl(VDD_IOCTL_REMOVE, buf, null, 2000);
-                File.Delete(idxFile);
+                if (IoControl(VDD_IOCTL_REMOVE, buf, null, 5000, 32, false))
+                {
+                    removed = true;
+                }
+                else
+                {
+                    var buf2 = new byte[2];
+                    buf2[0] = buf[0]; buf2[1] = buf[1];
+                    if (IoControl(VDD_IOCTL_REMOVE, buf2, null, 5000, 2, false))
+                        removed = true;
+                }
+                Log($"VDD REMOVE (stale cleanup) index {oldIdx}: {(removed ? "success" : "FAILED")} Win32Error={Marshal.GetLastWin32Error()}");
+                if (removed) remaining.Remove(oldIdx);
             }
+            // keep failed indices for next run; delete files only when all removed
+            try
+            {
+                if (remaining.Count == 0)
+                {
+                    try { File.Delete(IndicesPath); } catch { }
+                    try { File.Delete(LegacyIndexPath); } catch { }
+                }
+                else
+                {
+                    File.WriteAllLines(IndicesPath, remaining.Select(i => i.ToString()));
+                    try { File.Delete(LegacyIndexPath); } catch { }
+                }
+            }
+            catch { }
         }
         catch { }
+        // Ensure registry preset so driver creates display at requested resolution
+        try
+        {
+            if (!EnsureRegistryPreset(width, height, refreshHz))
+                Log("CreateAsync: EnsureRegistryPreset failed; continuing with fallback default res");
+        }
+        catch (Exception ex) { Log($"CreateAsync: EnsureRegistryPreset threw: {ex.Message}"); }
+
         var inBuf = new byte[32];
+        // Parsec VDD ADD ioctl expects width (uint16 @0), height (uint16 @2), refresh (uint16 @4), little-endian.
+        inBuf[0] = (byte)(width & 0xFF);
+        inBuf[1] = (byte)((width >> 8) & 0xFF);
+        inBuf[2] = (byte)(height & 0xFF);
+        inBuf[3] = (byte)((height >> 8) & 0xFF);
+        inBuf[4] = (byte)(refreshHz & 0xFF);
+        inBuf[5] = (byte)((refreshHz >> 8) & 0xFF);
         var outBuf = new byte[4];
         if (!IoControl(VDD_IOCTL_ADD, inBuf, outBuf, 5000))
             throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());
         int index = BitConverter.ToInt32(outBuf, 0);
         if (index < 0 || index > 15) throw new InvalidOperationException($"Invalid display index: {index}");
-        // Persist index so next run can clean up if this process is killed
+        // Persist ALL created indices (append)
         try
         {
-            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Screenly");
-            Directory.CreateDirectory(dir);
-            File.WriteAllText(Path.Combine(dir, "vdd-index.txt"), index.ToString());
+            Directory.CreateDirectory(AppDataDir);
+            File.AppendAllText(IndicesPath, index.ToString() + Environment.NewLine);
         }
         catch { }
+        Log($"VDD created index {index} ({width}x{height})");
+        try { IoControl(VDD_IOCTL_UPDATE, new byte[32], null, 1000); } catch { }
         var handle = new DisplayHandle(_nextId++);
         _displays[handle.Id] = index;
         StartPing();
         return Task.FromResult(handle);
     }
 
-    public Task RemoveAsync(DisplayHandle handle, CancellationToken ct = default)
+    public async Task RemoveAsync(DisplayHandle handle, CancellationToken ct = default)
     {
-        if (!_displays.TryGetValue(handle.Id, out var index)) return Task.CompletedTask;
+        if (!_displays.TryGetValue(handle.Id, out var index)) return;
+        // Stop ping thread before removal (UPDATE ioctls interfere)
+        StopPing();
         var inBuf = new byte[32];
-        // 16-bit big-endian index (per Parsec VDD protocol)
+        // official 16-bit big-endian index
         inBuf[0] = (byte)((index >> 8) & 0xFF);
         inBuf[1] = (byte)(index & 0xFF);
-        IoControl(VDD_IOCTL_REMOVE, inBuf, null, 1000);
-        _displays.Remove(handle.Id);
-        if (_displays.Count == 0) StopPing();
-        return Task.CompletedTask;
+        bool removed = IoControl(VDD_IOCTL_REMOVE, inBuf, null, 5000, 32, synchronous: false);
+        var werr = Marshal.GetLastWin32Error();
+        Log($"VDD REMOVE index {index}: {(removed ? "success" : "FAILED")} Win32Error={werr}");
+        if (removed)
+        {
+            _displays.Remove(handle.Id);
+            RemovePersistedIndex(index);
+            Log($"VDD removed index {index}");
+            await PingAsync();
+            if (_displays.Count > 0) StartPing();
+        }
+        else
+        {
+            // Leave orphaned index persisted for cleanup on next startup; keep handle for retry
+            Log($"VDD RemoveAsync FAILED for index {index} (Win32Error={werr}); orphaned index persisted");
+            throw new System.ComponentModel.Win32Exception(werr);
+        }
     }
 
     public Task SetModeAsync(DisplayHandle handle, int width, int height, int refreshHz, CancellationToken ct = default)
@@ -222,8 +380,10 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
     {
         StopPing();
         foreach (var kv in _displays.Keys.ToList())
-            RemoveAsync(new DisplayHandle(kv)).GetAwaiter().GetResult();
-        try { File.Delete(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Screenly", "vdd-index.txt")); } catch { }
+            try { RemoveAsync(new DisplayHandle(kv)).GetAwaiter().GetResult(); } catch { }
+        try { File.Delete(IndicesPath); } catch { }
+        try { File.Delete(LegacyIndexPath); } catch { }
         if (_handle != IntPtr.Zero) { CloseHandle(_handle); _handle = IntPtr.Zero; }
+        if (_syncHandle != IntPtr.Zero) { CloseHandle(_syncHandle); _syncHandle = IntPtr.Zero; }
     }
 }

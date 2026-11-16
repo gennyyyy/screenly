@@ -6,7 +6,7 @@ import kotlinx.serialization.json.Json
 @Serializable
 sealed interface ClientMsg
 
-@Serializable data class Hello(val protocolVersion: Int = 1, val deviceName: String, val screenWidth: Int, val screenHeight: Int, val densityDpi: Int, val pairingToken: String? = null, val pin: String? = null) : ClientMsg
+@Serializable data class Hello(val protocolVersion: Int = 1, val deviceName: String, val screenWidth: Int, val screenHeight: Int, val densityDpi: Int, val deviceId: String, val pairingToken: String? = null, val pin: String? = null) : ClientMsg
 @Serializable data class InputTouch(val events: List<TouchEvt>) : ClientMsg
 @Serializable data class TouchEvt(val type: String, val pointerId: Int, val x: Float, val y: Float, val pressure: Float, val tUs: Long)
 @Serializable data class InputKey(val events: List<KeyEvt>) : ClientMsg

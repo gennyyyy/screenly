@@ -44,6 +44,8 @@ public sealed class DxgiCapture : ICapture
     private IntPtr _hdcSrc = IntPtr.Zero;
     private int _width, _height;
     private int _monitorX, _monitorY;
+    private IntPtr _monitorHandle = IntPtr.Zero;
+    private int _monitorDpi = 96;
     private bool _monitorFound;
     private bool _running;
 
@@ -75,6 +77,7 @@ public sealed class DxgiCapture : ICapture
                 if (_width <= 0) _width = 1920;
                 if (_height <= 0) _height = 1080;
                 EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, MonitorCallback, IntPtr.Zero);
+                _monitorDpi = CursorDrawer.GetMonitorDpi(_monitorHandle);
             }
         }
         if (_hdcSrc == IntPtr.Zero)
@@ -119,7 +122,7 @@ public sealed class DxgiCapture : ICapture
             BitBlt(hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
 
             // Composite cursor into frame using shared helper
-            CursorDrawer.Draw(hdcMem, _monitorX, _monitorY, _width, _height);
+            CursorDrawer.Draw(hdcMem, _monitorX, _monitorY, _width, _height, _monitorDpi);
 
             var data = new byte[_width * _height * 4];
             Marshal.Copy(bits, data, 0, data.Length);
@@ -151,6 +154,7 @@ public sealed class DxgiCapture : ICapture
         {
             _monitorX = mi.rcMonitor.left;
             _monitorY = mi.rcMonitor.top;
+            _monitorHandle = hMonitor;
             _monitorFound = true;
         }
         return true;

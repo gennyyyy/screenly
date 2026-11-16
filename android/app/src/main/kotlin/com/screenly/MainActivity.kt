@@ -85,8 +85,11 @@ fun ScreenlyApp(activity: Activity) {
                     firstAttempt = false
                     val host = "127.0.0.1"
                     if (client.connect(host, 7543)) {
+                        val size = android.graphics.Point()
+                        activity.windowManager.defaultDisplay.getRealSize(size)
                         val dm = activity.resources.displayMetrics
-                        client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = dm.widthPixels, screenHeight = dm.heightPixels, densityDpi = dm.densityDpi))
+                        val deviceId = android.provider.Settings.Secure.getString(activity.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: ""
+                        client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = size.x, screenHeight = size.y, densityDpi = dm.densityDpi, deviceId = deviceId))
                     }
                 } else {
                     kotlinx.coroutines.delay(1000)
@@ -139,6 +142,11 @@ fun ScreenlyApp(activity: Activity) {
                                 showRetry = false
                             }
                         }
+                    }
+                    is ServerEvent.Configured -> {
+                        streamW = ev.c.width
+                        streamH = ev.c.height
+                        decoder.configure(ev.c.width, ev.c.height)
                     }
                     is ServerEvent.Disconnected -> {
                         connected = false

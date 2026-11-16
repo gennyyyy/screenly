@@ -39,4 +39,9 @@ Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
 Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
 
 [Run]
+; Install Parsec Virtual Display Driver (requires admin, may require reboot).
+Filename: "{tmp}\ParsecVDisplay-v0.45-setup.exe"; Parameters: "/S"; StatusMsg: "Installing Parsec Virtual Display Driver..."; Flags: waituntilterminated
+; Grant standard users write access to the Parsec VDD registry presets so the
+; engine can register arbitrary resolutions at runtime (no per-launch UAC).
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""$p='HKLM:\SOFTWARE\Parsec\vdd'; New-Item -Path $p -Force | Out-Null; $a=Get-Acl $p; $r=New-Object System.Security.AccessControl.RegistryAccessRule('Users','SetValue,CreateSubKey,Delete','ContainerInherit,ObjectInherit','None','Allow'); $a.SetAccessRule($r); Set-Acl $p $a"""; Flags: runhidden
 Filename: "{app}\{#MyAppExeName}"; Description: "Launch Screenly"; Flags: nowait postinstall skipifsilent

@@ -35,7 +35,7 @@ class ScreenlyClient {
         try {
             val s = Socket()
             s.tcpNoDelay = true
-            s.connect(java.net.InetSocketAddress(host, port), 5000)
+            s.connect(java.net.InetSocketAddress(host, port), 15000)
             socket = s
             input = DataInputStream(s.getInputStream())
             output = DataOutputStream(s.getOutputStream())
