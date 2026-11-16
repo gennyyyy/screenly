@@ -7,12 +7,12 @@ import android.view.SurfaceView
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
-import androidx.compose.foundation.background
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
@@ -48,7 +48,6 @@ class MainActivity : ComponentActivity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
-            // Re-apply immersive on focus change (bars can reappear on rotation/app switch)
             insetsController.hide(WindowInsetsCompat.Type.systemBars())
             insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
@@ -64,13 +63,19 @@ class MainActivity : ComponentActivity() {
 fun ScreenlyApp(activity: Activity) {
     val client = remember { ScreenlyClient() }
     var connected by remember { mutableStateOf(false) }
+    var firstFrameReceived by remember { mutableStateOf(false) }
     var streamW by remember { mutableIntStateOf(1920) }
     var streamH by remember { mutableIntStateOf(1080) }
     val surfaceView = remember { SurfaceView(activity) }
     val decoder = remember { VideoDecoder(surfaceView.holder) }
     DisposableEffect(Unit) { onDispose { decoder.release() } }
 
-    LaunchedEffect(Unit) {
+    // Retry state
+    var retryToken by remember { mutableIntStateOf(0) }
+    var showRetry by remember { mutableStateOf(false) }
+    var statusText by remember { mutableStateOf("Connecting to PC...") }
+
+    LaunchedEffect(retryToken) {
         var firstAttempt = true
         launch {
             while (true) {
@@ -87,6 +92,14 @@ fun ScreenlyApp(activity: Activity) {
                 }
             }
         }
+        // Timeout → show retry
+        launch {
+            kotlinx.coroutines.delay(10000)
+            if (!firstFrameReceived) {
+                statusText = "Still connecting..."
+                showRetry = true
+            }
+        }
         launch {
             client.events.collect { ev ->
                 when (ev) {
@@ -94,6 +107,7 @@ fun ScreenlyApp(activity: Activity) {
                         connected = true
                         ev.ack.config?.let { streamW = it.width; streamH = it.height }
                         activity.startService(Intent(activity, ConnectionService::class.java))
+                        statusText = "Waiting for first frame..."
                     }
                     is ServerEvent.Frame -> {
                         if (ev.w != streamW || ev.h != streamH) { streamW = ev.w; streamH = ev.h }
@@ -110,17 +124,23 @@ fun ScreenlyApp(activity: Activity) {
                                     surfaceView.holder.unlockCanvasAndPost(canvas)
                                 }
                                 bmp.recycle()
+                                if (!firstFrameReceived) {
+                                    firstFrameReceived = true
+                                    showRetry = false
+                                }
                             }
                         } else {
                             decoder.configure(ev.w, ev.h)
                             decoder.decode(ev.nal, ev.tsUs, ev.keyframe)
+                            if (!firstFrameReceived) {
+                                firstFrameReceived = true
+                                showRetry = false
+                            }
                         }
-                    }
-                    is ServerEvent.CursorPos -> {
-                        // Cursor is composited into frames; ignore position updates
                     }
                     is ServerEvent.Disconnected -> {
                         connected = false
+                        firstFrameReceived = false
                         client.close()
                         activity.stopService(Intent(activity, ConnectionService::class.java))
                     }
@@ -132,7 +152,6 @@ fun ScreenlyApp(activity: Activity) {
 
     MaterialTheme {
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
-            // Video fills the entire window (edge-to-edge)
             val sourceAspect = streamW.toFloat() / streamH.coerceAtLeast(1)
             val containerAspect = maxWidth.value / maxHeight.value.coerceAtLeast(1f)
             val videoWidth: androidx.compose.ui.unit.Dp
@@ -149,13 +168,29 @@ fun ScreenlyApp(activity: Activity) {
                 surfaceView.setOnTouchListener { _, ev -> tc.handle(ev, surfaceView.width, surfaceView.height); true }
                 surfaceView
             }, modifier = Modifier.size(videoWidth, videoHeight).align(Alignment.Center))
-            // Connecting overlay with inset padding (not covering video)
-            if (!connected) {
-                Column(Modifier.fillMaxSize().padding(16.dp).windowInsetsPadding(WindowInsets.systemBars)) {
+            // Loading overlay: shown until first frame received
+            if (!firstFrameReceived) {
+                Column(
+                    Modifier.fillMaxSize().padding(16.dp).windowInsetsPadding(WindowInsets.systemBars),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center
+                ) {
                     Text("Screenly", style = MaterialTheme.typography.headlineMedium)
-                    Spacer(Modifier.height(8.dp))
-                    Text("USB mode: connect phone to PC via USB.")
-                    Text("Connecting...")
+                    Spacer(Modifier.height(16.dp))
+                    CircularProgressIndicator()
+                    Spacer(Modifier.height(16.dp))
+                    Text(statusText)
+                    if (showRetry) {
+                        Spacer(Modifier.height(16.dp))
+                        Button(onClick = {
+                            client.close()
+                            firstFrameReceived = false
+                            connected = false
+                            showRetry = false
+                            statusText = "Connecting to PC..."
+                            retryToken++
+                        }) { Text("Retry") }
+                    }
                 }
             }
         }

@@ -18,12 +18,10 @@ public interface ICapture : IDisposable
     int Height { get; }
 }
 
-public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
+public sealed class GdiCapture : ICapture
 {
     [DllImport("gdi32.dll", CharSet = CharSet.Auto)] private static extern IntPtr CreateDC(string lpszDriver, string? lpszDevice, string? lpszOutput, IntPtr lpInitData);
     [DllImport("gdi32.dll")] private static extern bool BitBlt(IntPtr hdcDest, int x, int y, int cx, int cy, IntPtr hdcSrc, int x1, int y1, int rop);
-    [DllImport("gdi32.dll")] private static extern bool StretchBlt(IntPtr hdcDest, int x, int y, int cx, int cy, IntPtr hdcSrc, int x1, int y1, int cx1, int cy1, int rop);
-    [DllImport("gdi32.dll")] private static extern int SetStretchBltMode(IntPtr hdc, int mode);
     [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleDC(IntPtr hdc);
     [DllImport("gdi32.dll")] private static extern IntPtr CreateCompatibleBitmap(IntPtr hdc, int cx, int cy);
     [DllImport("gdi32.dll")] private static extern IntPtr SelectObject(IntPtr hdc, IntPtr h);
@@ -33,18 +31,10 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
     [DllImport("user32.dll")] private static extern IntPtr GetDC(IntPtr hwnd);
     [DllImport("user32.dll")] private static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
     [DllImport("user32.dll")] private static extern int GetSystemMetrics(int nIndex);
-    [DllImport("user32.dll")] private static extern bool GetCursorInfo(ref CURSORINFO pci);
-    [DllImport("user32.dll")] private static extern bool GetIconInfo(IntPtr hIcon, out ICONINFO piconinfo);
-    [DllImport("user32.dll")] private static extern bool DrawIconEx(IntPtr hdc, int xLeft, int yTop, IntPtr hIcon, int cxWidth, int cyHeight, uint istepIfAniCur, IntPtr hbrFlickerFreeDraw, uint diFlags);
+    [DllImport("user32.dll", CharSet = CharSet.Ansi)] private static extern bool EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
     [DllImport("user32.dll")] private static extern bool EnumDisplayMonitors(IntPtr hdc, IntPtr lprcClip, MonitorEnumProc lpfnEnum, IntPtr dwData);
     [DllImport("user32.dll", CharSet = CharSet.Auto)] private static extern bool GetMonitorInfo(IntPtr hMonitor, ref MONITORINFOEX lpmi);
     [DllImport("user32.dll", CharSet = CharSet.Auto)] private static extern bool EnumDisplayDevices(string? lpDevice, uint iDevNum, ref DISPLAY_DEVICE lpDisplayDevice, uint dwFlags);
-    [DllImport("user32.dll", CharSet = CharSet.Ansi)] private static extern bool EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
-    [DllImport("gdi32.dll")] private static extern IntPtr CreateSolidBrush(uint crColor);
-    [DllImport("gdi32.dll")] private static extern IntPtr CreatePen(int fnPenStyle, int nWidth, uint crColor);
-    [DllImport("gdi32.dll")] private static extern bool MoveToEx(IntPtr hdc, int x, int y, IntPtr lpPoint);
-    [DllImport("gdi32.dll")] private static extern bool LineTo(IntPtr hdc, int x, int y);
-    [DllImport("gdi32.dll")] private static extern bool Ellipse(IntPtr hdc, int left, int top, int right, int bottom);
 
     private delegate bool MonitorEnumProc(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData);
 
@@ -54,9 +44,6 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
         public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags;
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string szDevice;
     }
-    [StructLayout(LayoutKind.Sequential)] private struct CURSORINFO { public int cbSize; public int flags; public IntPtr hCursor; public POINT ptScreenPos; }
-    [StructLayout(LayoutKind.Sequential)] private struct POINT { public int x; public int y; }
-    [StructLayout(LayoutKind.Sequential)] private struct ICONINFO { public bool fIcon; public int xHotspot; public int yHotspot; public IntPtr hbmMask; public IntPtr hbmColor; }
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)] private struct DEVMODE
     {
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
@@ -79,8 +66,6 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 128)] public string DeviceKey;
     }
 
-    private const int CURSOR_SHOWING = 0x00000001;
-    private const uint DI_NORMAL = 0x0003;
     private const uint DISPLAY_DEVICE_ATTACHED_TO_DESKTOP = 0x00000001;
     private const int SM_CXSCREEN = 0;
     private const int SM_CYSCREEN = 1;
@@ -92,27 +77,20 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
     private IntPtr _hdcSrc = IntPtr.Zero;
     private int _width;
     private int _height;
-    private int _encW;
-    private int _encH;
     private int _monitorX;
     private int _monitorY;
-    private bool _monitorFound;
     private bool _running;
-    private bool _dbgSave;
     public int MonitorX => _monitorX;
     public int MonitorY => _monitorY;
-    public bool MonitorFound => _monitorFound;
     public int Width => _width;
     public int Height => _height;
     private readonly int _quality;
     private static ImageCodecInfo? _jpegCodec;
 
-    public GdiCapture(int quality = 70, string? deviceName = null, int encW = 1280, int encH = 720)
+    public GdiCapture(int quality = 70, string? deviceName = null)
     {
         _quality = quality;
         _deviceName = deviceName;
-        _encW = encW;
-        _encH = encH;
     }
 
     public void Start(int displayId)
@@ -123,7 +101,7 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
             _hdcSrc = CreateDC(_deviceName, null, null, IntPtr.Zero);
             if (_hdcSrc != IntPtr.Zero)
             {
-                // Use EnumDisplaySettings to get the actual resolution (more reliable than GetDeviceCaps)
+                // Use EnumDisplaySettings to get the actual resolution
                 var dm = new DEVMODE();
                 dm.dmSize = (short)Marshal.SizeOf<DEVMODE>();
                 if (EnumDisplaySettings(_deviceName, -1, ref dm))
@@ -146,12 +124,6 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
             _width = GetSystemMetrics(SM_CXSCREEN);
             _height = GetSystemMetrics(SM_CYSCREEN);
         }
-        if (!_monitorFound)
-        {
-            Console.WriteLine($"[GdiCapture] monitor not found for device '{_deviceName ?? "<null>"}'; defaulting to (0,0)");
-            _monitorX = 0;
-            _monitorY = 0;
-        }
         _running = true;
     }
 
@@ -161,21 +133,17 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
         if (!_running) return false;
         try
         {
-            int _testMarker = 42; // TEST_MARKER_12345
             IntPtr hdcSrc;
             bool createdDC = false;
             if (_hdcSrc != IntPtr.Zero) hdcSrc = _hdcSrc;
             else { hdcSrc = GetDC(IntPtr.Zero); createdDC = true; }
 
-            // Memory surface must come from the primary screen DC: DrawIconEx silently
-            // draws nothing when the bitmap is created from a secondary display DC.
-            var screenDc = GetDC(IntPtr.Zero);
-            var hdcMem = CreateCompatibleDC(screenDc);
-            var hBitmap = CreateCompatibleBitmap(screenDc, _width, _height);
+            var hdcMem = CreateCompatibleDC(hdcSrc);
+            var hBitmap = CreateCompatibleBitmap(hdcSrc, _width, _height);
             SelectObject(hdcMem, hBitmap);
             BitBlt(hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
 
-            // Composite cursor into frame using shared helper (native Windows cursor design)
+            // Composite cursor into frame (native Windows cursor design)
             CursorDrawer.Draw(hdcMem, _monitorX, _monitorY, _width, _height);
 
             using var bmp = Image.FromHbitmap(hBitmap);
@@ -187,11 +155,9 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
 
             DeleteObject(hBitmap);
             DeleteDC(hdcMem);
-            ReleaseDC(IntPtr.Zero, screenDc);
             if (createdDC) ReleaseDC(IntPtr.Zero, hdcSrc);
 
             frame = new CapturedFrame(ms.ToArray(), _width, _height, (ulong)DateTime.UtcNow.Ticks);
-            if (!_dbgSave) { _dbgSave = true; try { File.WriteAllBytes("C:\\\\Users\\\\genny_\\\\AppData\\\\Local\\\\Temp\\\\opencode\\\\cursor-frame.jpg", ms.ToArray()); } catch { } }
             return true;
         }
         catch { return false; }
@@ -200,18 +166,16 @@ public sealed class GdiCapture : ICapture // UNIQUE_MARKER_XYZ789
     private bool MonitorCallback(IntPtr hMonitor, IntPtr hdcMonitor, ref RECT lprcMonitor, IntPtr dwData)
     {
         var mi = new MONITORINFOEX { cbSize = Marshal.SizeOf<MONITORINFOEX>() };
-        if (GetMonitorInfo(hMonitor, ref mi) && _deviceName != null && mi.szDevice == _deviceName)
+        if (GetMonitorInfo(hMonitor, ref mi) && mi.szDevice == _deviceName)
         {
             _monitorX = mi.rcMonitor.left;
             _monitorY = mi.rcMonitor.top;
-            _monitorFound = true;
         }
         return true;
     }
 
     public void Stop() => _running = false;
     public void Dispose() => Stop();
-
 
     public static string? FindVirtualDisplayDevicePublic() => FindVirtualDisplayDevice();
     private static string? FindVirtualDisplayDevice()
