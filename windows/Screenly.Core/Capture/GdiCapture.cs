@@ -138,8 +138,11 @@ public sealed class GdiCapture : ICapture
             if (_hdcSrc != IntPtr.Zero) hdcSrc = _hdcSrc;
             else { hdcSrc = GetDC(IntPtr.Zero); createdDC = true; }
 
-            var hdcMem = CreateCompatibleDC(hdcSrc);
-            var hBitmap = CreateCompatibleBitmap(hdcSrc, _width, _height);
+            // Memory surface must come from the primary screen DC: DrawIconEx silently
+            // draws nothing when the bitmap is created from a secondary display DC.
+            var screenDc = GetDC(IntPtr.Zero);
+            var hdcMem = CreateCompatibleDC(screenDc);
+            var hBitmap = CreateCompatibleBitmap(screenDc, _width, _height);
             SelectObject(hdcMem, hBitmap);
             BitBlt(hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
 
@@ -155,6 +158,7 @@ public sealed class GdiCapture : ICapture
 
             DeleteObject(hBitmap);
             DeleteDC(hdcMem);
+            ReleaseDC(IntPtr.Zero, screenDc);
             if (createdDC) ReleaseDC(IntPtr.Zero, hdcSrc);
 
             frame = new CapturedFrame(ms.ToArray(), _width, _height, (ulong)DateTime.UtcNow.Ticks);

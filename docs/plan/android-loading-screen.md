@@ -49,10 +49,31 @@ Use **Option A now**, with one small addition from Option B: a status line that 
 6. Keep the loading screen until the first frame is received, not just on handshake, to avoid a flash of black.
 7. Add a small timeout test (manual): disconnect PC, observe retry button; reconnect, observe it disappear.
 
+## Required invariants (do not break)
+- Keep the connection loop and handshake timeout exactly as they are; do not replace `LaunchedEffect(retryToken)` with `LaunchedEffect(Unit)` unless the retry coroutine is removed deliberately.
+- Keep `ServerEvent.Frame` handling unchanged: decode JPEG, draw into the `SurfaceView`, recycle the bitmap. Do not add overlay drawing to the JPEG branch; the cursor is composited into the frame by the Windows engine.
+- `CursorPos`/`CursorShape` remain ignored (no sender); do not reintroduce Android cursor overlay state.
+- Keep `ServerEvent.Disconnected` handling: set `connected = false`, close the client, stop the connection service, and reset `firstFrameReceived = false`.
+- Keep `FLAG_KEEP_SCREEN_ON`.
+- Fullscreen must be applied in `onCreate` and re-applied in `onWindowFocusChanged`.
+- Do not block touches meant for the video; the loading overlay is only shown while `!firstFrameReceived`.
+- Disable the Retry button while a connect attempt is in flight.
+
 ## Risks
 - Reconnect storms if "Retry" is spammed; disable the button while connecting.
 - The loading overlay must not capture touches meant for the video after connect; only show while `!connected || !firstFrameReceived`.
 - Keep screen on (`FLAG_KEEP_SCREEN_ON`) so the loading screen doesn't sleep.
+- Fullscreen insets must not cover the video; only the connecting UI.
+- The running Windows engine must be the fixed binary (`GdiCapture` creates its memory surface from `GetDC(IntPtr.Zero)`), otherwise the cursor is invisible even though the Android code is correct. Verify the process path/hash before testing.
+
+## Regression checklist (must pass before calling done)
+- Fresh launch with PC connected: loading screen appears, then video fills the screen, cursor visible.
+- Fresh launch with PC disconnected: loading screen + Retry button after timeout; clicking Retry attempts reconnect.
+- Disconnect PC mid-stream: loading screen returns; reconnect restores video and cursor.
+- Rotate device: no crash, still fullscreen, video resumes.
+- Swipe from edge: system bars appear briefly then hide.
+- No double cursor and no invisible cursor on connect or reconnect.
+- Connection loop still retries every ~2s when disconnected.
 
 ## Open questions
 - None blocking. Logo/branding can be added later when an asset exists.

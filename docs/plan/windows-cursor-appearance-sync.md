@@ -12,6 +12,7 @@ Cursor is composited into the captured frame (simplest path: works for the exist
 ## Scope
 
 - In: create capture memory surfaces from the primary screen DC, keep `CursorDrawer.Draw`, verify the cursor appears at the correct position in JPEG frames on the secondary display.
+- Preserve the GdiCapture memory-surface fix in all future edits: memory DC/bitmap from `GetDC(IntPtr.Zero)`, BitBlt from the display DC. Reverting this silently breaks the cursor.
 - Out: separate `CursorPos`/`CursorShape` overlay, Android UI changes, H.264 encoder work, touch injection, animated cursors.
 
 ## Action items
