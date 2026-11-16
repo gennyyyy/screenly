@@ -8,18 +8,19 @@ import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.background
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.DisposableEffect
-import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
+import androidx.compose.foundation.background
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
-import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.compose.foundation.Canvas
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+// USB-only: no mDNS discovery
 import com.screenly.net.Hello
 import com.screenly.net.ScreenlyClient
 import com.screenly.net.ServerEvent
@@ -30,10 +31,32 @@ import com.screenly.video.DisplayGeometry
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+    private lateinit var insetsController: WindowInsetsControllerCompat
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Edge-to-edge: content extends under system bars
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        insetsController = WindowInsetsControllerCompat(window, window.decorView)
+        // Immersive sticky: hide system bars, reappear on swipe then auto-hide
+        insetsController.hide(WindowInsetsCompat.Type.systemBars())
+        insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         setContent { ScreenlyApp(this) }
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            // Re-apply immersive on focus change (bars can reappear on rotation/app switch)
+            insetsController.hide(WindowInsetsCompat.Type.systemBars())
+            insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        try { insetsController.show(WindowInsetsCompat.Type.systemBars()) } catch (_: Exception) { }
     }
 }
 
@@ -43,12 +66,6 @@ fun ScreenlyApp(activity: Activity) {
     var connected by remember { mutableStateOf(false) }
     var streamW by remember { mutableIntStateOf(1920) }
     var streamH by remember { mutableIntStateOf(1080) }
-    var cursorX by remember { mutableIntStateOf(0) }
-    var cursorY by remember { mutableIntStateOf(0) }
-    var cursorVisible by remember { mutableStateOf(false) }
-    var cursorBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
-    var cursorHotspotX by remember { mutableIntStateOf(0) }
-    var cursorHotspotY by remember { mutableIntStateOf(0) }
     val surfaceView = remember { SurfaceView(activity) }
     val decoder = remember { VideoDecoder(surfaceView.holder) }
     DisposableEffect(Unit) { onDispose { decoder.release() } }
@@ -61,13 +78,9 @@ fun ScreenlyApp(activity: Activity) {
                     if (!firstAttempt) kotlinx.coroutines.delay(2000)
                     firstAttempt = false
                     val host = "127.0.0.1"
-                    val connected_ok = client.connect(host, 7543)
-                    if (connected_ok) {
+                    if (client.connect(host, 7543)) {
                         val dm = activity.resources.displayMetrics
                         client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = dm.widthPixels, screenHeight = dm.heightPixels, densityDpi = dm.densityDpi))
-                        kotlinx.coroutines.withTimeoutOrNull(5000) {
-                            while (!connected) kotlinx.coroutines.delay(100)
-                        }
                     }
                 } else {
                     kotlinx.coroutines.delay(1000)
@@ -104,22 +117,12 @@ fun ScreenlyApp(activity: Activity) {
                         }
                     }
                     is ServerEvent.CursorPos -> {
-                        cursorX = ev.x
-                        cursorY = ev.y
-                        cursorVisible = ev.visible
+                        // Cursor is composited into frames; ignore position updates
                     }
                     is ServerEvent.Disconnected -> {
                         connected = false
                         client.close()
                         activity.stopService(Intent(activity, ConnectionService::class.java))
-                    }
-                    is ServerEvent.CursorShape -> {
-                        val bmp = android.graphics.BitmapFactory.decodeByteArray(ev.pngData, 0, ev.pngData.size)
-                        if (bmp != null) {
-                            cursorBitmap = bmp
-                            cursorHotspotX = ev.hotspotX
-                            cursorHotspotY = ev.hotspotY
-                        }
                     }
                     else -> {}
                 }
@@ -129,6 +132,7 @@ fun ScreenlyApp(activity: Activity) {
 
     MaterialTheme {
         BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
+            // Video fills the entire window (edge-to-edge)
             val sourceAspect = streamW.toFloat() / streamH.coerceAtLeast(1)
             val containerAspect = maxWidth.value / maxHeight.value.coerceAtLeast(1f)
             val videoWidth: androidx.compose.ui.unit.Dp
@@ -140,45 +144,14 @@ fun ScreenlyApp(activity: Activity) {
                 videoWidth = maxWidth
                 videoHeight = maxWidth / sourceAspect
             }
-            Box(Modifier.size(videoWidth, videoHeight).align(Alignment.Center)) {
-                AndroidView(factory = { _ ->
-                    val tc = TouchCapture(client, { streamW }, { streamH })
-                    surfaceView.setOnTouchListener { _, ev -> tc.handle(ev, surfaceView.width, surfaceView.height); true }
-                    surfaceView
-                }, modifier = Modifier.fillMaxSize())
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    if (!cursorVisible) return@Canvas
-                    val viewW = size.width.toInt().coerceAtLeast(1)
-                    val viewH = size.height.toInt().coerceAtLeast(1)
-                    val content = DisplayGeometry.contentRect(viewW, viewH, streamW, streamH)
-                    val (vx, vy) = DisplayGeometry.streamToView(cursorX, cursorY, content, streamW, streamH)
-                    val bmp = cursorBitmap
-                    drawIntoCanvas { canvas ->
-                        val native = canvas.nativeCanvas
-                        if (bmp != null) {
-                            val scale = if (streamW > 0) content.width() / streamW else 1f
-                            val left = vx - cursorHotspotX * scale
-                            val top = vy - cursorHotspotY * scale
-                            val dst = android.graphics.RectF(left, top, left + bmp.width * scale, top + bmp.height * scale)
-                            native.drawBitmap(bmp, null, dst, null)
-                        } else {
-                            val paint = android.graphics.Paint().apply {
-                                color = android.graphics.Color.YELLOW
-                                style = android.graphics.Paint.Style.FILL
-                            }
-                            native.drawCircle(vx, vy, 12f, paint)
-                            val crossPaint = android.graphics.Paint().apply {
-                                color = android.graphics.Color.RED
-                                strokeWidth = 3f
-                            }
-                            native.drawLine(vx - 15f, vy, vx + 15f, vy, crossPaint)
-                            native.drawLine(vx, vy - 15f, vx, vy + 15f, crossPaint)
-                        }
-                    }
-                }
-            }
+            AndroidView(factory = { _ ->
+                val tc = TouchCapture(client, { streamW }, { streamH })
+                surfaceView.setOnTouchListener { _, ev -> tc.handle(ev, surfaceView.width, surfaceView.height); true }
+                surfaceView
+            }, modifier = Modifier.size(videoWidth, videoHeight).align(Alignment.Center))
+            // Connecting overlay with inset padding (not covering video)
             if (!connected) {
-                Column(Modifier.fillMaxSize().padding(16.dp)) {
+                Column(Modifier.fillMaxSize().padding(16.dp).windowInsetsPadding(WindowInsets.systemBars)) {
                     Text("Screenly", style = MaterialTheme.typography.headlineMedium)
                     Spacer(Modifier.height(8.dp))
                     Text("USB mode: connect phone to PC via USB.")

@@ -26,3 +26,4 @@ Cursor is composited into the captured frame (simplest path: works for the exist
 ## Open questions
 
 - None blocking. JPEG is the verified path; the fix needs no Android rebuild.
+- Deployment check: confirm the running `Screenly.Engine.exe` path/hash before testing. A stale `C:\Program Files\Screenly` engine was launched after the per-user update, which reproduced the missing cursor on reconnect.
