@@ -13,6 +13,11 @@ public partial class MainWindow : System.Windows.Window
         InitializeComponent();
         Loaded += (_, _) => ShowInfo();
 
+        // Poll status.json every second for live FPS/codec updates
+        var timer = new System.Windows.Threading.DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        timer.Tick += (_, _) => RefreshStatus();
+        timer.Start();
+
         _tray = new System.Windows.Forms.NotifyIcon
         {
             Icon = SystemIcons.Application,
@@ -42,50 +47,41 @@ public partial class MainWindow : System.Windows.Window
                 using var c = new System.Net.Sockets.TcpClient();
                 c.Connect("127.0.0.1", 7543);
                 c.Close();
-
-                string codec = "—", connType = "—";
-                int w = 0, h = 0, fps = 0, devices = 0;
-                var statusPath = System.IO.Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
-                    "Screenly", "status.json");
-                for (int j = 0; j < 5; j++)
-                {
-                    if (System.IO.File.Exists(statusPath))
-                    {
-                        try
-                        {
-                            var json = System.IO.File.ReadAllText(statusPath);
-                            using var doc = System.Text.Json.JsonDocument.Parse(json);
-                            var root = doc.RootElement;
-                            codec = root.TryGetProperty("codec", out var cEl) ? (cEl.GetString() ?? "—") : "—";
-                            w = root.TryGetProperty("width", out var wEl) ? wEl.GetInt32() : 0;
-                            h = root.TryGetProperty("height", out var hEl) ? hEl.GetInt32() : 0;
-                            fps = root.TryGetProperty("fps", out var fEl) ? fEl.GetInt32() : 0;
-                            connType = root.TryGetProperty("connectionType", out var ctEl) ? (ctEl.GetString() ?? "—") : "—";
-                            devices = root.TryGetProperty("connectedDevices", out var cdEl) ? cdEl.GetInt32() : 0;
-                        }
-                        catch { }
-                        break;
-                    }
-                    System.Threading.Thread.Sleep(500);
-                }
-
                 StatusDot.Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x34, 0xD3, 0x99));
                 StatusText.Text = "Engine running";
-                EncoderText.Text = codec.ToUpperInvariant();
-                ResolutionText.Text = $"{w} × {h}  @ {fps} fps";
-                ConnectionText.Text = connType;
-                DevicesText.Text = devices.ToString();
+                RefreshStatus();
                 return;
             }
             catch { System.Threading.Thread.Sleep(500); }
         }
         StatusDot.Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xF8, 0x71, 0x71));
         StatusText.Text = "Engine not running";
-        EncoderText.Text = "—";
-        ResolutionText.Text = "—";
-        ConnectionText.Text = "—";
-        DevicesText.Text = "—";
+    }
+
+    private void RefreshStatus()
+    {
+        try
+        {
+            var statusPath = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                "Screenly", "status.json");
+            if (!System.IO.File.Exists(statusPath)) return;
+            var json = System.IO.File.ReadAllText(statusPath);
+            using var doc = System.Text.Json.JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            var codec = root.TryGetProperty("codec", out var cEl) ? (cEl.GetString() ?? "—") : "—";
+            var w = root.TryGetProperty("width", out var wEl) ? wEl.GetInt32() : 0;
+            var h = root.TryGetProperty("height", out var hEl) ? hEl.GetInt32() : 0;
+            var fps = root.TryGetProperty("fps", out var fEl) ? fEl.GetInt32() : 0;
+            var connType = root.TryGetProperty("connectionType", out var ctEl) ? (ctEl.GetString() ?? "—") : "—";
+            var devices = root.TryGetProperty("connectedDevices", out var cdEl) ? cdEl.GetInt32() : 0;
+
+            EncoderText.Text = codec.ToUpperInvariant();
+            ResolutionText.Text = $"{w} × {h}  @ {fps} fps";
+            ConnectionText.Text = connType;
+            DevicesText.Text = devices.ToString();
+        }
+        catch { }
     }
 
     private void ShowWindow()

@@ -558,6 +558,8 @@ public static class Program
         // Capture + stream loop (~30 fps)
         uint seq = 0;
         uint frameCounter = 0;
+        uint lastStatusSeq = 0;
+        var lastStatusTime = DateTime.UtcNow;
         var loop = Task.Run(async () =>
         {
             while (!cts.IsCancellationRequested)
@@ -647,6 +649,20 @@ public static class Program
                 catch (Exception ex) { Log($"session {kv.Key} frame error: {ex.Message}"); }
                 }
                 frameCounter++;
+                // Update status file with live FPS every ~1 second
+                var now = DateTime.UtcNow;
+                if ((now - lastStatusTime).TotalSeconds >= 1.0)
+                {
+                    var delta = (int)(seq - lastStatusSeq);
+                    var fps = delta > 0 ? delta : cfg.Encoding.TargetFps;
+                    lastStatusSeq = seq;
+                    lastStatusTime = now;
+                    var st0 = sessionStates.Values.FirstOrDefault();
+                    var codec = st0?.UseH264 == true ? "h264" : "jpeg";
+                    var cw = st0?.Capture?.Width ?? cfg.VirtualDisplay.Width;
+                    var ch = st0?.Capture?.Height ?? cfg.VirtualDisplay.Height;
+                    try { WriteStatusFile(codec, cw, ch, fps, "USB", server.Sessions.Count(s => s.HasHandshaked)); } catch { }
+                }
                 try { await Task.Delay(10, cts.Token); } catch (OperationCanceledException) { break; }
             }
         }, cts.Token);
