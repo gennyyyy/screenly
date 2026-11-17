@@ -12,20 +12,27 @@ class VideoDecoder(private val holder: SurfaceHolder) {
     private var pendingFrame: Triple<ByteArray, Long, Boolean>? = null
 
     fun configure(w: Int, h: Int) {
+        if (w <= 0 || h <= 0) return
         if (w == width && h == height && codec != null) return
         try { codec?.stop() } catch (_: Exception) { }
         try { codec?.release() } catch (_: Exception) { }
+        codec = null
         width = w; height = h
         val surface = holder.surface ?: run { pendingFrame = null; return }
-        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h)
-        format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-        format.setInteger(MediaFormat.KEY_PRIORITY, 0)
-        codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).apply {
-            configure(format, surface, null, 0)
-            start()
+        try {
+            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h)
+            format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+            format.setInteger(MediaFormat.KEY_PRIORITY, 0)
+            codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).apply {
+                configure(format, surface, null, 0)
+                start()
+            }
+            pendingFrame?.let { (nal, ts, kf) -> decode(nal, ts, kf) }
+            pendingFrame = null
+        } catch (e: Exception) {
+            android.util.Log.e("VideoDecoder", "configure failed for ${w}x${h}", e)
+            codec = null
         }
-        pendingFrame?.let { (nal, ts, kf) -> decode(nal, ts, kf) }
-        pendingFrame = null
     }
 
     fun decode(nal: ByteArray, ptsUs: Long, isKeyframe: Boolean) {

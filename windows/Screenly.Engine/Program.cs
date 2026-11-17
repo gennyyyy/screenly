@@ -525,6 +525,7 @@ public static class Program
         // Capture + stream loop (~30 fps)
         uint seq = 0;
         uint frameCounter = 0;
+        int lastConfigW = 0, lastConfigH = 0;
         var loop = Task.Run(async () =>
         {
             while (!cts.IsCancellationRequested)
@@ -574,15 +575,18 @@ public static class Program
                                 cap = gc;
                             }
                         }
-                        // Notify all handshaked sessions with CONFIG
                         var activeCodecNow = useH264 ? "h264" : "jpeg";
                         var cw = cap?.Width ?? cfg.VirtualDisplay.Width;
                         var ch = cap?.Height ?? cfg.VirtualDisplay.Height;
-                        var configJson = JsonSerializer.Serialize(new { width = cw, height = ch, fps = cfg.Encoding.TargetFps, bitrateKbps = cfg.Encoding.BitrateKbps, codec = activeCodecNow });
-                        var configBytes = Encoding.UTF8.GetBytes(configJson);
-                        foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
+                        if (cw != lastConfigW || ch != lastConfigH)
                         {
-                            try { await s.SendAsync(MessageType.Config, configBytes); } catch { }
+                            lastConfigW = cw; lastConfigH = ch;
+                            var configJson = JsonSerializer.Serialize(new { width = cw, height = ch, fps = cfg.Encoding.TargetFps, bitrateKbps = cfg.Encoding.BitrateKbps, codec = activeCodecNow });
+                            var configBytes = Encoding.UTF8.GetBytes(configJson);
+                            foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
+                            {
+                                try { await s.SendAsync(MessageType.Config, configBytes); } catch { }
+                            }
                         }
                     }
                 }
