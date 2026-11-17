@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Windows;
+using System.Windows.Media;
 
 namespace Screenly.Host;
 
@@ -34,7 +35,6 @@ public partial class MainWindow : System.Windows.Window
 
     private void ShowInfo()
     {
-        // Wait briefly for engine to start listening
         for (int i = 0; i < 20; i++)
         {
             try
@@ -42,7 +42,9 @@ public partial class MainWindow : System.Windows.Window
                 using var c = new System.Net.Sockets.TcpClient();
                 c.Connect("127.0.0.1", 7543);
                 c.Close();
-                string statusLine = "";
+
+                string codec = "—", connType = "—";
+                int w = 0, h = 0, fps = 0, devices = 0;
                 var statusPath = System.IO.Path.Combine(
                     Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                     "Screenly", "status.json");
@@ -55,26 +57,35 @@ public partial class MainWindow : System.Windows.Window
                             var json = System.IO.File.ReadAllText(statusPath);
                             using var doc = System.Text.Json.JsonDocument.Parse(json);
                             var root = doc.RootElement;
-                            var codec = root.TryGetProperty("codec", out var cEl) ? (cEl.GetString() ?? "?") : "?";
-                            var w = root.TryGetProperty("width", out var wEl) ? wEl.GetInt32() : 0;
-                            var h = root.TryGetProperty("height", out var hEl) ? hEl.GetInt32() : 0;
-                            var fps = root.TryGetProperty("fps", out var fEl) ? fEl.GetInt32() : 0;
-                            var connType = root.TryGetProperty("connectionType", out var ctEl) ? (ctEl.GetString() ?? "?") : "?";
-                            var devices = root.TryGetProperty("connectedDevices", out var cdEl) ? cdEl.GetInt32() : 0;
-                            statusLine = "\n\nEncoder: " + codec + " " + w + "x" + h + " @ " + fps + " fps" +
-                                "\nConnection: " + connType + "  Devices: " + devices;
+                            codec = root.TryGetProperty("codec", out var cEl) ? (cEl.GetString() ?? "—") : "—";
+                            w = root.TryGetProperty("width", out var wEl) ? wEl.GetInt32() : 0;
+                            h = root.TryGetProperty("height", out var hEl) ? hEl.GetInt32() : 0;
+                            fps = root.TryGetProperty("fps", out var fEl) ? fEl.GetInt32() : 0;
+                            connType = root.TryGetProperty("connectionType", out var ctEl) ? (ctEl.GetString() ?? "—") : "—";
+                            devices = root.TryGetProperty("connectedDevices", out var cdEl) ? cdEl.GetInt32() : 0;
                         }
                         catch { }
                         break;
                     }
                     System.Threading.Thread.Sleep(500);
                 }
-                InfoText.Text = "Screenly engine is running (USB mode).\n\nOn your PC run once:\n  adb reverse tcp:7543 tcp:7543\n\nThen open the Screenly app on your phone - it auto-connects over USB.\n\nPort: 7543" + statusLine;
+
+                StatusDot.Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0x34, 0xD3, 0x99));
+                StatusText.Text = "Engine running";
+                EncoderText.Text = codec.ToUpperInvariant();
+                ResolutionText.Text = $"{w} × {h}  @ {fps} fps";
+                ConnectionText.Text = connType;
+                DevicesText.Text = devices.ToString();
                 return;
             }
             catch { System.Threading.Thread.Sleep(500); }
         }
-        InfoText.Text = "Engine may not have started. Check that Screenly.Engine.exe is running.\nPort: 7543";
+        StatusDot.Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xF8, 0x71, 0x71));
+        StatusText.Text = "Engine not running";
+        EncoderText.Text = "—";
+        ResolutionText.Text = "—";
+        ConnectionText.Text = "—";
+        DevicesText.Text = "—";
     }
 
     private void ShowWindow()

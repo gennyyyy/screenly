@@ -1,11 +1,129 @@
 <Window x:Class="Screenly.Host.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Screenly" Height="400" Width="500">
-    <Grid Margin="10">
-        <StackPanel>
-            <TextBlock Text="Screenly" FontSize="20" FontWeight="Bold" Margin="0,0,0,10"/>
-            <TextBlock x:Name="InfoText" TextWrapping="Wrap" FontFamily="Consolas" />
+        Title="Screenly" Height="520" Width="460"
+        WindowStartupLocation="CenterScreen"
+        Background="#0A0A0F"
+        ResizeMode="CanMinimize"
+        FontFamily="Segoe UI">
+    <Window.Resources>
+        <SolidColorBrush x:Key="BgCard" Color="#14141C"/>
+        <SolidColorBrush x:Key="BgCardAlt" Color="#1A1A24"/>
+        <SolidColorBrush x:Key="Accent" Color="#C9A96E"/>
+        <SolidColorBrush x:Key="AccentDim" Color="#8B7355"/>
+        <SolidColorBrush x:Key="TextPrimary" Color="#F5F5F7"/>
+        <SolidColorBrush x:Key="TextSecondary" Color="#8E8E93"/>
+        <SolidColorBrush x:Key="TextMuted" Color="#5A5A60"/>
+        <SolidColorBrush x:Key="Border" Color="#2A2A35"/>
+        <SolidColorBrush x:Key="Green" Color="#34D399"/>
+        <SolidColorBrush x:Key="Red" Color="#F87171"/>
+
+        <Style x:Key="Card" TargetType="Border">
+            <Setter Property="Background" Value="{StaticResource BgCard}"/>
+            <Setter Property="BorderBrush" Value="{StaticResource Border}"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="CornerRadius" Value="12"/>
+            <Setter Property="Padding" Value="20"/>
+            <Setter Property="Margin" Value="0,0,0,12"/>
+        </Style>
+        <Style x:Key="Label" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TextSecondary}"/>
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+            <Setter Property="Margin" Value="0,0,0,4"/>
+        </Style>
+        <Style x:Key="Value" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+            <Setter Property="FontSize" Value="14"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+        </Style>
+        <Style x:Key="Badge" TargetType="Border">
+            <Setter Property="CornerRadius" Value="6"/>
+            <Setter Property="Padding" Value="8,3"/>
+            <Setter Property="HorizontalAlignment" Value="Left"/>
+        </Style>
+    </Window.Resources>
+
+    <Grid Margin="24">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <StackPanel Grid.Row="0" Margin="0,0,0,20">
+            <TextBlock Text="S C R E E N L Y" FontSize="13" FontWeight="SemiBold"
+                       Foreground="{StaticResource Accent}" Margin="0,0,0,2"/>
+            <TextBlock Text="Host Control" FontSize="26" FontWeight="Light"
+                       Foreground="{StaticResource TextPrimary}"/>
+        </StackPanel>
+
+        <!-- Content -->
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel>
+                <!-- Status card -->
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="ENGINE STATUS" Style="{StaticResource Label}"/>
+                        <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
+                            <Ellipse x:Name="StatusDot" Width="8" Height="8" Fill="{StaticResource Red}" Margin="0,6,10,0"/>
+                            <TextBlock x:Name="StatusText" Text="Connecting..." Style="{StaticResource Value}"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- Encoder card -->
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="ENCODER" Style="{StaticResource Label}"/>
+                            <TextBlock x:Name="EncoderText" Text="—" Style="{StaticResource Value}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="RESOLUTION" Style="{StaticResource Label}"/>
+                            <TextBlock x:Name="ResolutionText" Text="—" Style="{StaticResource Value}"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- Connection card -->
+                <Border Style="{StaticResource Card}">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="CONNECTION" Style="{StaticResource Label}"/>
+                            <TextBlock x:Name="ConnectionText" Text="—" Style="{StaticResource Value}"/>
+                        </StackPanel>
+                        <StackPanel Grid.Column="1">
+                            <TextBlock Text="DEVICES" Style="{StaticResource Label}"/>
+                            <TextBlock x:Name="DevicesText" Text="—" Style="{StaticResource Value}"/>
+                        </StackPanel>
+                    </Grid>
+                </Border>
+
+                <!-- Setup card -->
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="SETUP" Style="{StaticResource Label}"/>
+                        <TextBlock Text="1.  Run on PC:  adb reverse tcp:7543 tcp:7543" FontFamily="Consolas" FontSize="12" Foreground="{StaticResource TextSecondary}" Margin="0,6,0,2"/>
+                        <TextBlock Text="2.  Open Screenly app on your phone" FontSize="12" Foreground="{StaticResource TextSecondary}" Margin="0,2,0,2"/>
+                        <TextBlock Text="3.  App auto-connects over USB" FontSize="12" Foreground="{StaticResource TextSecondary}" Margin="0,2,0,0"/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+
+        <!-- Footer -->
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,12,0,0">
+            <TextBlock Text="Port 7543  ·  USB Mode" FontSize="10" Foreground="{StaticResource TextMuted}"/>
         </StackPanel>
     </Grid>
 </Window>
