@@ -83,7 +83,6 @@ class ScreenlyClient {
                 _events.tryEmit(ServerEvent.HelloAcked(ack))
             }
             Protocol.VIDEO_FRAME -> {
-                android.util.Log.e("ScreenlyClient", "dispatch VIDEO_FRAME, size=${payload.size}")
                 val bb = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN)
                 val seq = bb.int
                 val ts = bb.long

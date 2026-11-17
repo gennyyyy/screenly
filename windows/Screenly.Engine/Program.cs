@@ -159,8 +159,10 @@ public static class Program
 
         var displayLock = new SemaphoreSlim(1, 1);
         var sessionStates = new ConcurrentDictionary<Guid, SessionState>();
-        // Pool of reusable VDD handles (avoids removal failures)
-        var availableDisplays = new ConcurrentBag<(DisplayManager dm, DisplayHandle handle, int w, int h)>();
+        // One shared virtual display reused by all sessions (no per-client VDD churn).
+        DisplayManager? sharedDm = null;
+        DisplayHandle? sharedHandle = null;
+        int sharedW = 0, sharedH = 0;
         string requestedCodec = (cfg.Encoding.Codec ?? "jpeg").ToLowerInvariant();
 
         // Watch config.json so the host app can switch encoder at runtime.
@@ -238,38 +240,60 @@ public static class Program
             }
         }
 
-        async Task CreateDisplayForState(SessionState state, DisplayManager dm, int width, int height)
+        async Task CreateDisplayForState(SessionState state, int width, int height)
         {
             bool created = false;
             try
             {
-                var handle = await dm.CreateAsync(width, height, cfg.VirtualDisplay.RefreshHz);
-                Log($"CreateAsync result: success, handle {handle.Id} ({width}x{height})");
-                created = true;
-                var devName = GdiCapture.FindVirtualDisplayDevicePublic();
-                if (devName != null)
+                // Reuse the shared virtual display when the resolution already matches.
+                if (sharedHandle is { } sh && sharedW == width && sharedH == height && sharedDm != null)
                 {
-                    try
-                    {
-                        var cdm = new DisplayHelper.DEVMODE();
-                        cdm.dmSize = (short)Marshal.SizeOf<DisplayHelper.DEVMODE>();
-                        if (DisplayHelper.EnumDisplaySettings(devName, -1, ref cdm))
-                        {
-                            cdm.dmPelsWidth = width;
-                            cdm.dmPelsHeight = height;
-                            cdm.dmDisplayFrequency = cfg.VirtualDisplay.RefreshHz;
-                            cdm.dmFields = (int)(DisplayHelper.DM_PELSWIDTH | DisplayHelper.DM_PELSHEIGHT | DisplayHelper.DM_DISPLAYFREQUENCY);
-                            int rc = DisplayHelper.ChangeDisplaySettingsEx(devName, ref cdm, IntPtr.Zero, DisplayHelper.CDS_UPDATEREGISTRY, IntPtr.Zero);
-                            Log($"ChangeDisplaySettingsEx: rc={rc}");
-                        }
-                    }
-                    catch (Exception ex) { Log($"ChangeDisplaySettingsEx failed: {ex.Message}"); }
+                    state.Display = sharedDm;
+                    Log($"reusing existing VDD handle {sh.Id} at {width}x{height}");
+                    created = true;
                 }
                 else
                 {
-                    Log("FindVirtualDisplayDevice returned null");
+                    // Resolution changed: drop the old shared display and create a new one.
+                    if (sharedDm != null)
+                    {
+                        try { await sharedDm.RemoveAsync(); } catch { }
+                        sharedDm = null; sharedHandle = null;
+                    }
+                    var dm = new DisplayManager(vddDriver);
+                    var handle = await dm.CreateAsync(width, height, cfg.VirtualDisplay.RefreshHz);
+                    Log($"CreateAsync result: success, handle {handle.Id} ({width}x{height})");
+                    sharedDm = dm;
+                    sharedHandle = handle;
+                    sharedW = width; sharedH = height;
+                    state.Display = dm;
+                    created = true;
+
+                    var devName = GdiCapture.FindVirtualDisplayDevicePublic();
+                    if (devName != null)
+                    {
+                        try
+                        {
+                            var cdm = new DisplayHelper.DEVMODE();
+                            cdm.dmSize = (short)Marshal.SizeOf<DisplayHelper.DEVMODE>();
+                            if (DisplayHelper.EnumDisplaySettings(devName, -1, ref cdm))
+                            {
+                                cdm.dmPelsWidth = width;
+                                cdm.dmPelsHeight = height;
+                                cdm.dmDisplayFrequency = cfg.VirtualDisplay.RefreshHz;
+                                cdm.dmFields = (int)(DisplayHelper.DM_PELSWIDTH | DisplayHelper.DM_PELSHEIGHT | DisplayHelper.DM_DISPLAYFREQUENCY);
+                                int rc = DisplayHelper.ChangeDisplaySettingsEx(devName, ref cdm, IntPtr.Zero, DisplayHelper.CDS_UPDATEREGISTRY, IntPtr.Zero);
+                                Log($"ChangeDisplaySettingsEx: rc={rc}");
+                            }
+                        }
+                        catch (Exception ex) { Log($"ChangeDisplaySettingsEx failed: {ex.Message}"); }
+                    }
+                    else
+                    {
+                        Log("FindVirtualDisplayDevice returned null");
+                    }
+                    try { SetDisplayConfig(0, IntPtr.Zero, 0, IntPtr.Zero, SDC_TOPOLOGY_EXTEND | SDC_APPLY); } catch { }
                 }
-                try { SetDisplayConfig(0, IntPtr.Zero, 0, IntPtr.Zero, SDC_TOPOLOGY_EXTEND | SDC_APPLY); } catch { }
             }
             catch (Exception ex)
             {
@@ -304,16 +328,13 @@ public static class Program
 
         async Task RecreateSessionAsync(Session session, SessionState state, int tw, int th)
         {
-            try { await state.Display.RemoveAsync(); } catch (Exception ex) { Log($"Recreate: RemoveAsync FAILED ({ex.Message}); proceeding"); }
-            await Task.Delay(100);
             state.Capture?.Stop();
-            try { } catch { }
             state.Capture?.Dispose();
             state.Capture = null;
             state.Encoder?.Dispose();
             state.Encoder = null;
             await Task.Delay(500);
-            await CreateDisplayForState(state, state.Display, tw, th);
+            await CreateDisplayForState(state, tw, th);
             state.Width = state.Capture?.Width ?? tw;
             state.Height = state.Capture?.Height ?? th;
             if (state.Capture != null)
@@ -334,7 +355,7 @@ public static class Program
                 try { st.Capture?.Stop(); } catch { }
                 st.Capture?.Dispose();
                 st.Encoder?.Dispose();
-                try { st.Display.RemoveAsync().GetAwaiter().GetResult(); } catch { }
+                // Shared VDD is kept for reuse by the next client (no churn).
             }
             try { WriteStatusFile(requestedCodec, cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height, cfg.Encoding.TargetFps, "USB", server.Sessions.Count(x => x.HasHandshaked)); } catch { }
         };
@@ -390,11 +411,10 @@ public static class Program
                         }
 
                         var state = new SessionState { DeviceId = deviceId };
-                        state.Display = new DisplayManager(vddDriver);
                         await displayLock.WaitAsync();
                         try
                         {
-                            await CreateDisplayForState(state, state.Display, targetW, targetH);
+                            await CreateDisplayForState(state, targetW, targetH);
                             if (state.Capture != null)
                             {
                                 var m = LoadPersistedResolutions();
@@ -476,9 +496,11 @@ public static class Program
                             else { tw = cfg.VirtualDisplay.Width; th = cfg.VirtualDisplay.Height; }
                             if (st.Capture == null || st.Capture.Width != tw || st.Capture.Height != th)
                             {
-                                await RecreateSessionAsync(session, st, tw, th); 
+                                await displayLock.WaitAsync();
+                                try { await RecreateSessionAsync(session, st, tw, th); }
+                                finally { displayLock.Release(); }
                                 try { WriteStatusFile(st.UseH264 ? "h264" : "jpeg", st.Capture?.Width ?? cfg.VirtualDisplay.Width, st.Capture?.Height ?? cfg.VirtualDisplay.Height, cfg.Encoding.TargetFps, "USB", server.Sessions.Count(s => s.HasHandshaked)); } catch { }
-                            } 
+                            }
                         } 
                         await session.SendAsync(MessageType.Config, payload);
                         break;
@@ -771,7 +793,6 @@ public static class Program
             try { kv.Value.Capture?.Stop(); } catch { }
             kv.Value.Capture?.Dispose();
             kv.Value.Encoder?.Dispose();
-            try { kv.Value.Display.RemoveAsync().GetAwaiter().GetResult(); } catch { }
         }
         sessionStates.Clear();
         await server.DisposeAsync();

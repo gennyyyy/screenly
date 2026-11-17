@@ -131,7 +131,6 @@ fun ScreenlyApp(activity: Activity) {
         }
         // Event collector
         launch {
-            android.util.Log.e("MainActivity", "event collector started")
             client.events.collect { ev ->
                 when (ev) {
                     is ServerEvent.HelloAcked -> {
@@ -142,7 +141,6 @@ fun ScreenlyApp(activity: Activity) {
                     }
                     is ServerEvent.Frame -> {
                         if (ev.w != streamW || ev.h != streamH) { streamW = ev.w; streamH = ev.h }
-                        android.util.Log.e("MainActivity", "Frame received: ${ev.w}x${ev.h}, isJpeg=${ev.isJpeg}")
                         // No auto-rotate: follow the tablet's physical orientation (manual rotation).
                         if (ev.isJpeg) {
                             val bmp = android.graphics.BitmapFactory.decodeByteArray(ev.nal, 0, ev.nal.size)
