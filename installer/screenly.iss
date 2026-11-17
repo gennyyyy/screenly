@@ -19,6 +19,9 @@ ArchitecturesInstallIn64BitMode=x64
 
 [Files]
 Source: "..\app\Screenly.Engine.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\app\Screenly.Engine.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\app\Screenly.Engine.deps.json"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\app\Screenly.Engine.runtimeconfig.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\app\Screenly.Host.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\app\Screenly.Host.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\app\Screenly.Core.dll"; DestDir: "{app}"; Flags: ignoreversion
