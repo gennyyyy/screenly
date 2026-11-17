@@ -95,20 +95,30 @@ fun ScreenlyApp(activity: Activity) {
     var statusText by remember { mutableStateOf("Connecting to PC...") }
 
     LaunchedEffect(retryToken) {
+        android.util.Log.e("MainActivity", "LaunchedEffect started, retryToken=$retryToken")
         var firstAttempt = true
         // Connection loop
         launch {
             while (true) {
                 if (!connected) {
+                    android.util.Log.e("MainActivity", "not connected, attempting connect")
                     if (!firstAttempt) kotlinx.coroutines.delay(2000)
                     firstAttempt = false
                     val host = "127.0.0.1"
-                    if (client.connect(host, 7543)) {
-                        val size = android.graphics.Point()
-                        activity.windowManager.defaultDisplay.getRealSize(size)
-                        val dm = activity.resources.displayMetrics
-                        val deviceId = android.provider.Settings.Secure.getString(activity.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: ""
-                        client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = size.x, screenHeight = size.y, densityDpi = dm.densityDpi, deviceId = deviceId))
+                    try {
+                        if (client.connect(host, 7543)) {
+                            android.util.Log.e("MainActivity", "connected, sending HELLO")
+                            val size = android.graphics.Point()
+                            activity.windowManager.defaultDisplay.getRealSize(size)
+                            val dm = activity.resources.displayMetrics
+                            val deviceId = android.provider.Settings.Secure.getString(activity.contentResolver, android.provider.Settings.Secure.ANDROID_ID) ?: ""
+                            client.send(Hello(deviceName = android.os.Build.MODEL, screenWidth = size.x, screenHeight = size.y, densityDpi = dm.densityDpi, deviceId = deviceId))
+                            android.util.Log.e("MainActivity", "HELLO sent")
+                        } else {
+                            android.util.Log.e("MainActivity", "connect returned false")
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.e("MainActivity", "connect/send failed: ${e.message}")
                     }
                 } else {
                     kotlinx.coroutines.delay(1000)
@@ -125,8 +135,11 @@ fun ScreenlyApp(activity: Activity) {
         }
         // Event collector
         launch {
-            client.events.collect { ev ->
-                when (ev) {
+            android.util.Log.e("MainActivity", "event collector started")
+            try {
+                client.events.collect { ev ->
+                    android.util.Log.e("MainActivity", "event: ${ev::class.simpleName}")
+                    when (ev) {
                     is ServerEvent.HelloAcked -> {
                         connected = true
                         ev.ack.config?.let { streamW = it.width; streamH = it.height }
@@ -139,6 +152,7 @@ fun ScreenlyApp(activity: Activity) {
                         if (ev.isJpeg) {
                             val bmp = android.graphics.BitmapFactory.decodeByteArray(ev.nal, 0, ev.nal.size)
                             if (bmp != null) {
+                                android.util.Log.e("MainActivity", "bitmap ${bmp.width}x${bmp.height}")
                                 val canvas = try { surfaceView.holder.lockCanvas() } catch (_: Exception) { null }
                                 if (canvas != null) {
                                     val vw = surfaceView.width.coerceAtLeast(1)
@@ -192,6 +206,9 @@ fun ScreenlyApp(activity: Activity) {
                     }
                     else -> {}
                 }
+            }
+            } catch (e: Exception) {
+                android.util.Log.e("MainActivity", "collect error: ${e.message}")
             }
         }
     }

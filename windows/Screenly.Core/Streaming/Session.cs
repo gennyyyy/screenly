@@ -23,6 +23,9 @@ public sealed class Session : IAsyncDisposable
             client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 5);
             client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, 1);
             client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, 3);
+            // Increase buffer sizes to prevent drops under load
+            client.Client.SendBufferSize = 256 * 1024;
+            client.Client.ReceiveBufferSize = 256 * 1024;
         }
         catch { }
         Stream = client.GetStream();

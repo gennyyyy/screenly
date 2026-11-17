@@ -36,8 +36,6 @@ class VideoDecoder(private val holder: SurfaceHolder) : SurfaceHolder.Callback {
         val surface = holder.surface ?: return
         try {
             val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h)
-            format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
-            format.setInteger(MediaFormat.KEY_PRIORITY, 0)
             codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC).apply {
                 configure(format, surface, null, 0)
                 start()

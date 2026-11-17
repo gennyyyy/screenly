@@ -554,6 +554,8 @@ public static class Program
             }
         }, cts.Token);
 
+        Log("after ADB task, starting frame loop");
+
         // Capture + stream loop (~30 fps)
         uint seq = 0;
         uint frameCounter = 0;
@@ -561,6 +563,7 @@ public static class Program
         var lastStatusTime = DateTime.UtcNow;
         var loop = Task.Run(async () =>
         {
+            Log("frame loop started");
             while (!cts.IsCancellationRequested)
             {
                 var snapshot = sessionStates.ToArray();
