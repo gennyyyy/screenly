@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Media;
 
 namespace Screenly.Host;
@@ -40,6 +41,16 @@ public partial class MainWindow : System.Windows.Window
 
     private void ShowInfo()
     {
+        // Reflect current encoder in the selector
+        try
+        {
+            var cfg = Screenly.Core.Config.ConfigStore.Load();
+            var codec = (cfg.Encoding.Codec ?? "jpeg").ToLowerInvariant();
+            foreach (ComboBoxItem item in CodecCombo.Items)
+                item.IsSelected = (string)item.Tag == codec;
+        }
+        catch { }
+
         for (int i = 0; i < 20; i++)
         {
             try
@@ -56,6 +67,21 @@ public partial class MainWindow : System.Windows.Window
         }
         StatusDot.Fill = new SolidColorBrush(System.Windows.Media.Color.FromRgb(0xF8, 0x71, 0x71));
         StatusText.Text = "Engine not running";
+    }
+
+    private void CodecCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (CodecCombo.SelectedItem is not ComboBoxItem item) return;
+        var codec = (string)item.Tag;
+        try
+        {
+            var cfg = Screenly.Core.Config.ConfigStore.Load();
+            if ((cfg.Encoding.Codec ?? "").ToLowerInvariant() == codec) return;
+            cfg = cfg with { Encoding = cfg.Encoding with { Codec = codec } };
+            Screenly.Core.Config.ConfigStore.Save(cfg);
+            EncoderText.Text = codec.ToUpperInvariant();
+        }
+        catch { }
     }
 
     private void RefreshStatus()

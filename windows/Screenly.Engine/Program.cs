@@ -162,6 +162,34 @@ public static class Program
         // Pool of reusable VDD handles (avoids removal failures)
         var availableDisplays = new ConcurrentBag<(DisplayManager dm, DisplayHandle handle, int w, int h)>();
         string requestedCodec = (cfg.Encoding.Codec ?? "jpeg").ToLowerInvariant();
+
+        // Watch config.json so the host app can switch encoder at runtime.
+        try
+        {
+            var watcher = new System.IO.FileSystemWatcher(
+                System.IO.Path.GetDirectoryName(ConfigStore.ConfigPath)!,
+                System.IO.Path.GetFileName(ConfigStore.ConfigPath))
+            {
+                NotifyFilter = System.IO.NotifyFilters.LastWrite | System.IO.NotifyFilters.Size,
+                EnableRaisingEvents = true,
+            };
+            watcher.Changed += (_, _) =>
+            {
+                try
+                {
+                    System.Threading.Thread.Sleep(200); // let the writer finish
+                    var fresh = ConfigStore.Load();
+                    var c = (fresh.Encoding.Codec ?? "jpeg").ToLowerInvariant();
+                    if (c != requestedCodec)
+                    {
+                        requestedCodec = c;
+                        Log($"config changed: encoder switched to {c}");
+                    }
+                }
+                catch { }
+            };
+        }
+        catch { }
         byte[]? currentShapePayload = null;
 
         async Task CreateCaptureForState(SessionState state)
@@ -628,7 +656,12 @@ public static class Program
                             var enc = st.Encoder.Encode(rawFrame.JpegData, rawFrame.Width, rawFrame.Height, rawFrame.TimestampUs);
                             if (enc != null)
                             {
-                                var header = new VideoFrameHeader(seq++, enc.TimestampUs, (ushort)rawFrame.Width, (ushort)rawFrame.Height, true, false); // force keyframe for testing
+                                var header = new VideoFrameHeader(seq++, enc.TimestampUs, (ushort)rawFrame.Width, (ushort)rawFrame.Height, enc.IsKeyframe, false);
+                                if (seq == 1)
+                                {
+                                    var prefixLength = Math.Min(24, enc.Data.Length);
+                                    Log($"H264 first output: {enc.Data.Length} bytes, keyframe={enc.IsKeyframe}, prefix={Convert.ToHexString(enc.Data.AsSpan(0, prefixLength))}");
+                                }
                                 var msg = FrameCodec.Encode(header, enc.Data);
                                 try { await sess.SendAsync(MessageType.VideoFrame, msg); } catch { }
                                 if (seq % 100 == 0) Log($"frames sent: {seq}");

@@ -109,6 +109,22 @@
                     </Grid>
                 </Border>
 
+                <!-- Encoder card -->
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="ENCODER" Style="{StaticResource Label}"/>
+                        <ComboBox x:Name="CodecCombo" Width="160" Height="32"
+                                  HorizontalAlignment="Left" Margin="0,4,0,0"
+                                  Background="{StaticResource BgCardAlt}"
+                                  Foreground="{StaticResource TextPrimary}"
+                                  BorderBrush="{StaticResource Border}"
+                                  SelectionChanged="CodecCombo_SelectionChanged">
+                            <ComboBoxItem Content="JPEG" Tag="jpeg" IsSelected="True"/>
+                            <ComboBoxItem Content="H.264" Tag="h264"/>
+                        </ComboBox>
+                    </StackPanel>
+                </Border>
+
                 <!-- Setup card -->
                 <Border Style="{StaticResource Card}">
                     <StackPanel>
