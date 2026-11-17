@@ -37,7 +37,7 @@ public sealed class Session : IAsyncDisposable
                 }
             }
             catch (OperationCanceledException) { }
-            catch (Exception) { } // log in production
+            catch (Exception ex) { try { System.IO.File.AppendAllText(System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Screenly", "engine.log"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Session receive loop error: {ex}{Environment.NewLine}"); } catch { } } // log in production
         }, ct);
 
     public async ValueTask DisposeAsync()
@@ -99,10 +99,8 @@ public sealed class StreamServer : IAsyncDisposable
                 while (!pingCts.IsCancellationRequested)
                 {
                     await Task.Delay(5000, pingCts.Token);
-                    // Check PONG timeout (10s)
                     if ((DateTime.UtcNow - session.LastPong).TotalSeconds > 10)
                     {
-                        Console.WriteLine($"Session {session.Id}: PONG timeout, disconnecting");
                         break;
                     }
                     try { await session.SendAsync(MessageType.Ping, Array.Empty<byte>(), pingCts.Token); }

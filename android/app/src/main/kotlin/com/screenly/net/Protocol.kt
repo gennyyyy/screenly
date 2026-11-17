@@ -13,6 +13,7 @@ sealed interface ClientMsg
 @Serializable data class KeyEvt(val type: String, val keyCode: Int, val tUs: Long)
 @Serializable data class Config(val width: Int, val height: Int, val fps: Int, val bitrateKbps: Int, val keyframeIntervalSec: Int = 2, val codec: String = "jpeg") : ClientMsg
 @Serializable data object Ping : ClientMsg
+@Serializable data object PongMsg : ClientMsg
 @Serializable data class Disconnect(val reason: String, val message: String? = null) : ClientMsg
 
 @Serializable

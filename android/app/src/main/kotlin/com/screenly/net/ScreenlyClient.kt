@@ -103,7 +103,7 @@ class ScreenlyClient {
             }
             Protocol.PING -> {
                 // Answer Windows PING with PONG
-                scope.launch { send(Ping) }
+                scope.launch { send(PongMsg) }
             }
             Protocol.PONG -> _events.tryEmit(ServerEvent.Ponged)
             Protocol.CURSOR_POS -> {
@@ -138,6 +138,7 @@ class ScreenlyClient {
             is InputKey -> Protocol.INPUT_KEY to Protocol.json.encodeToString(InputKey.serializer(), msg).toByteArray()
             is Config -> Protocol.CONFIG to Protocol.json.encodeToString(Config.serializer(), msg).toByteArray()
             is Ping -> Protocol.PING to ByteArray(0)
+            is PongMsg -> Protocol.PONG to ByteArray(0)
             is Disconnect -> Protocol.DISCONNECT to Protocol.json.encodeToString(Disconnect.serializer(), msg).toByteArray()
         }
         try {

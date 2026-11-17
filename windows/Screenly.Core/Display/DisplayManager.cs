@@ -86,13 +86,13 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
         if (overlapped)
         {
             if (_handle != IntPtr.Zero) return _handle;
-            var path = @"\\?\ROOT#DISPLAY#0001#{00b41627-04c4-429e-a26e-0265cf50c8fa}";
+            var path = @"\\?\ROOT#DISPLAY#0000#{00b41627-04c4-429e-a26e-0265cf50c8fa}";
             var h = CreateFile(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, IntPtr.Zero);
             if (h != new IntPtr(-1)) { _handle = h; return h; }
             return IntPtr.Zero;
         }
         if (_syncHandle != IntPtr.Zero) return _syncHandle;
-        var spath = @"\\?\ROOT#DISPLAY#0001#{00b41627-04c4-429e-a26e-0265cf50c8fa}";
+        var spath = @"\\?\ROOT#DISPLAY#0000#{00b41627-04c4-429e-a26e-0265cf50c8fa}";
         var sh = CreateFile(spath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
         if (sh != new IntPtr(-1)) { _syncHandle = sh; return sh; }
         return IntPtr.Zero;
@@ -283,14 +283,9 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
         }
         catch (Exception ex) { Log($"CreateAsync: EnsureRegistryPreset threw: {ex.Message}"); }
 
+        // Parsec VDD ADD ioctl: all-zeros creates a display at default resolution.
+        // Resolution is then set via ChangeDisplaySettingsEx in the engine.
         var inBuf = new byte[32];
-        // Parsec VDD ADD ioctl expects width (uint16 @0), height (uint16 @2), refresh (uint16 @4), little-endian.
-        inBuf[0] = (byte)(width & 0xFF);
-        inBuf[1] = (byte)((width >> 8) & 0xFF);
-        inBuf[2] = (byte)(height & 0xFF);
-        inBuf[3] = (byte)((height >> 8) & 0xFF);
-        inBuf[4] = (byte)(refreshHz & 0xFF);
-        inBuf[5] = (byte)((refreshHz >> 8) & 0xFF);
         var outBuf = new byte[4];
         if (!IoControl(VDD_IOCTL_ADD, inBuf, outBuf, 5000))
             throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error());

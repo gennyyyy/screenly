@@ -169,7 +169,7 @@ public static class Program
                     enc?.Dispose();
                     encoder = null;
                     useH264 = false;
-                    var gc = new GdiCapture(70);
+                    var gc = new GdiCapture(30);
                     gc.Start(0);
                     capture = gc;
                 }
@@ -180,8 +180,7 @@ public static class Program
                 gc.Start(0);
                 capture = gc;
             }
-            if (capture != null)
-                Log($"Capturing display at origin ({capture.MonitorX}, {capture.MonitorY}), size {capture.Width}x{capture.Height}");
+            // capture stays as-is (fallback)
         }
 
         async Task CreateDisplayAt(int width, int height)
@@ -192,78 +191,36 @@ public static class Program
                 vddHandle = await display.CreateAsync(width, height, cfg.VirtualDisplay.RefreshHz);
                 Log($"CreateAsync result: success, handle {vddHandle.Id} ({width}x{height})");
                 created = true;
-                await Task.Delay(5000);
-                try
+                var devName = GdiCapture.FindVirtualDisplayDevicePublic();
+                if (devName != null)
                 {
-                    var devName = GdiCapture.FindVirtualDisplayDevicePublic();
-                    if (devName == null)
+                    try
                     {
-                        Log($"CreateDisplayAt diagnostic: requested={width}x{height} actual=UNKNOWN reason=FindVirtualDisplayDevicePublic returned null");
-                    }
-                    else
-                    {
-                        // Set resolution via ChangeDisplaySettingsEx
-                        try
+                        var cdm = new DisplayHelper.DEVMODE();
+                        cdm.dmSize = (short)Marshal.SizeOf<DisplayHelper.DEVMODE>();
+                        if (DisplayHelper.EnumDisplaySettings(devName, -1, ref cdm))
                         {
-                            var cdm = new DisplayHelper.DEVMODE();
-                            cdm.dmSize = (short)Marshal.SizeOf<DisplayHelper.DEVMODE>();
-                            if (DisplayHelper.EnumDisplaySettings(devName, -1, ref cdm))
-                            {
-                                cdm.dmPelsWidth = width;
-                                cdm.dmPelsHeight = height;
-                                cdm.dmDisplayFrequency = cfg.VirtualDisplay.RefreshHz;
-                                cdm.dmFields = (int)(DisplayHelper.DM_PELSWIDTH | DisplayHelper.DM_PELSHEIGHT | DisplayHelper.DM_DISPLAYFREQUENCY);
-                                int rc = DisplayHelper.ChangeDisplaySettingsEx(devName, ref cdm, IntPtr.Zero, DisplayHelper.CDS_UPDATEREGISTRY, IntPtr.Zero);
-                                Log($"CreateDisplayAt ChangeDisplaySettingsEx: rc={rc} ({(rc == 0 ? "OK" : "err")})");
-                            }
-                            else
-                            {
-                                Log("CreateDisplayAt: EnumDisplaySettings failed before ChangeDisplaySettingsEx");
-                            }
-                        }
-                        catch (Exception ex) { Log($"CreateDisplayAt ChangeDisplaySettingsEx failed: {ex.Message}"); }
-                        await Task.Delay(2000);
-                        var mode = new DisplayHelper.DEVMODE();
-                        mode.dmSize = (short)Marshal.SizeOf<DisplayHelper.DEVMODE>();
-                        if (DisplayHelper.EnumDisplaySettings(devName, -1, ref mode))
-                        {
-                            bool match = mode.dmPelsWidth == width && mode.dmPelsHeight == height;
-                            Log($"CreateDisplayAt diagnostic: requested={width}x{height} actual={mode.dmPelsWidth}x{mode.dmPelsHeight} match={match}");
-                        }
-                        else
-                        {
-                            Log($"CreateDisplayAt diagnostic: requested={width}x{height} actual=UNKNOWN reason=EnumDisplaySettings failed");
+                            cdm.dmPelsWidth = width;
+                            cdm.dmPelsHeight = height;
+                            cdm.dmDisplayFrequency = cfg.VirtualDisplay.RefreshHz;
+                            cdm.dmFields = (int)(DisplayHelper.DM_PELSWIDTH | DisplayHelper.DM_PELSHEIGHT | DisplayHelper.DM_DISPLAYFREQUENCY);
+                            int rc = DisplayHelper.ChangeDisplaySettingsEx(devName, ref cdm, IntPtr.Zero, DisplayHelper.CDS_UPDATEREGISTRY, IntPtr.Zero);
+                            Log($"ChangeDisplaySettingsEx: rc={rc}");
                         }
                     }
+                    catch (Exception ex) { Log($"ChangeDisplaySettingsEx failed: {ex.Message}"); }
                 }
-                catch (Exception ex) { Log($"CreateDisplayAt diagnostic: requested={width}x{height} actual=UNKNOWN reason={ex.Message}"); }
+                else
+                {
+                    Log("FindVirtualDisplayDevice returned null");
+                }
                 try { SetDisplayConfig(0, IntPtr.Zero, 0, IntPtr.Zero, SDC_TOPOLOGY_EXTEND | SDC_APPLY); } catch { }
             }
             catch (Exception ex)
             {
-                Log($"CreateAsync failed ({ex.Message}); retrying with default 1920x1080 (no primary-screen fallback).");
-                if (!(width == 1920 && height == 1080))
-                {
-                    try
-                    {
-                        vddHandle = await display.CreateAsync(1920, 1080, cfg.VirtualDisplay.RefreshHz);
-                        Log($"CreateAsync result: success (retry), handle {vddHandle.Id} (1920x1080)");
-                        created = true;
-                        width = 1920; height = 1080;
-                        await Task.Delay(5000);
-                    }
-                    catch (Exception ex2)
-                    {
-                        Log($"CreateAsync retry failed ({ex2.Message}); no virtual display created.");
-                        vddHandle = default;
-                        created = false;
-                    }
-                }
-                else
-                {
-                    vddHandle = default;
-                    created = false;
-                }
+                Log($"CreateAsync failed ({ex.Message}); falling back to primary capture (no VDD retry).");
+                vddHandle = default;
+                created = false;
             }
             if (created)
             {
@@ -271,7 +228,9 @@ public static class Program
             }
             else
             {
-                Log("CreateDisplayAt: no virtual display; skipping capture (no primary-screen fallback).");
+                Log("CreateDisplayAt: no virtual display; NO capture (testing).");
+                capture = null;
+                displayCreated = false;
             }
         }
 
@@ -356,6 +315,8 @@ public static class Program
         server.ClientDisconnected += s => Log($"Client disconnected: {s.Id}");
         server.MessageHandler = async (session, type, payload) =>
         {
+            try
+            {
             switch (type)
             {
                 case MessageType.Hello:
@@ -462,6 +423,8 @@ public static class Program
                     Log("Client disconnect requested");
                     break;
             }
+            }
+            catch (Exception ex) { Log($"MessageHandler error: {ex}"); }
         };
         server.Start();
         Log($"listening on port {cfg.Port}");
@@ -569,7 +532,7 @@ public static class Program
                                 useH264 = false;
                                 try { capture?.Stop(); } catch { }
                                 capture?.Dispose();
-                                var gc = new GdiCapture(70);
+                                var gc = new GdiCapture(30);
                                 gc.Start(0);
                                 capture = gc;
                                 cap = gc;
@@ -668,8 +631,6 @@ public static class Program
                         {
                             try { await s.SendAsync(MessageType.CursorPos, payload, cts.Token); } catch { }
                         }
-
-                        // handle change -> capture shape
                         if (ci.hCursor != lastCursorHandle)
                         {
                             lastCursorHandle = ci.hCursor;
@@ -677,7 +638,6 @@ public static class Program
                             if (shape.HasValue)
                             {
                                 var (sw, sh, hx, hy, png) = shape.Value;
-                                Log($"CursorShape captured {sw}x{sh} (shadow attenuated)");
                                 var sp = new byte[16 + png.Length];
                                 BitConverter.TryWriteBytes(sp.AsSpan(0, 4), sw);
                                 BitConverter.TryWriteBytes(sp.AsSpan(4, 4), sh);
