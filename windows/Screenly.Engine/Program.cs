@@ -438,36 +438,46 @@ public static class Program
                 }
                 try
                 {
-                    var psi = new System.Diagnostics.ProcessStartInfo(adb, $"reverse tcp:7543 tcp:{cfg.Port}")
+                    var psiList = new System.Diagnostics.ProcessStartInfo(adb, "devices")
                     {
                         CreateNoWindow = true, UseShellExecute = false,
                         RedirectStandardOutput = true, RedirectStandardError = true,
                     };
-                    using var proc = System.Diagnostics.Process.Start(psi);
-                    if (proc == null)
+                    using var procList = System.Diagnostics.Process.Start(psiList);
+                    if (procList != null)
                     {
-                        Log("ADB reverse failed to start");
-                        try { await Task.Delay(3000, cts.Token); } catch (OperationCanceledException) { break; }
-                        continue;
+                        procList.WaitForExit(5000);
+                        var output = procList.StandardOutput.ReadToEnd();
+                        var serials = new System.Collections.Generic.List<string>();
+                        foreach (var line in output.Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries))
+                        {
+                            var parts = line.Split(new[] { '\t', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                            if (parts.Length >= 2 && parts[1] == "device")
+                                serials.Add(parts[0]);
+                        }
+                        if (serials.Count == 0)
+                        {
+                            Log("No ADB devices connected; retrying in 5s");
+                            try { await Task.Delay(5000, cts.Token); } catch (OperationCanceledException) { break; }
+                            continue;
+                        }
+                        foreach (var serial in serials)
+                        {
+                            var psi = new System.Diagnostics.ProcessStartInfo(adb, $"-s {serial} reverse tcp:7543 tcp:{cfg.Port}")
+                            {
+                                CreateNoWindow = true, UseShellExecute = false,
+                                RedirectStandardOutput = true, RedirectStandardError = true,
+                            };
+                            using var proc = System.Diagnostics.Process.Start(psi);
+                            if (proc == null) continue;
+                            proc.WaitForExit(5000);
+                            var stderr = proc.StandardError.ReadToEnd();
+                            if (proc.ExitCode != 0)
+                                Log($"ADB reverse failed for {serial} (exit {proc.ExitCode}): {stderr.Trim()}");
+                            else
+                                Log($"ADB reverse configured: {serial} device:7543 -> host:{cfg.Port}");
+                        }
                     }
-                    bool exited = proc.WaitForExit(15000);
-                    if (!exited)
-                    {
-                        try { proc.Kill(); } catch { }
-                        Log("ADB reverse timed out");
-                        try { await Task.Delay(3000, cts.Token); } catch (OperationCanceledException) { break; }
-                        continue;
-                    }
-                    var stdout = proc.StandardOutput.ReadToEnd();
-                    var stderr = proc.StandardError.ReadToEnd();
-                    if (proc.ExitCode != 0)
-                    {
-                        Log($"ADB reverse failed (exit {proc.ExitCode}): {stderr.Trim()}");
-                        try { await Task.Delay(3000, cts.Token); } catch (OperationCanceledException) { break; }
-                        continue;
-                    }
-                    Log($"ADB reverse configured: device:7543 -> host:{cfg.Port}");
-                    // Success - re-verify periodically
                     await Task.Delay(10000, cts.Token);
                 }
                 catch (OperationCanceledException) { break; }
