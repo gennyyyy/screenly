@@ -47,6 +47,7 @@ class MainActivity : ComponentActivity() {
         // Immersive sticky: hide system bars, reappear on swipe then auto-hide
         insetsController.hide(WindowInsetsCompat.Type.systemBars())
         insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        android.util.Log.d("MainActivity", "onCreate: setting content")
         setContent { ScreenlyApp(this) }
     }
 
@@ -103,7 +104,9 @@ fun ScreenlyApp(activity: Activity) {
                     if (!firstAttempt) kotlinx.coroutines.delay(2000)
                     firstAttempt = false
                     val host = "127.0.0.1"
+                    android.util.Log.d("ScreenlyApp", "connecting...")
                     if (client.connect(host, 7543)) {
+                        android.util.Log.d("ScreenlyApp", "connected, sending HELLO")
                         val size = android.graphics.Point()
                         activity.windowManager.defaultDisplay.getRealSize(size)
                         val dm = activity.resources.displayMetrics
@@ -128,6 +131,7 @@ fun ScreenlyApp(activity: Activity) {
             client.events.collect { ev ->
                 when (ev) {
                     is ServerEvent.HelloAcked -> {
+                        android.util.Log.d("ScreenlyApp", "HelloAcked received")
                         connected = true
                         ev.ack.config?.let { streamW = it.width; streamH = it.height }
                         activity.startService(Intent(activity, ConnectionService::class.java))

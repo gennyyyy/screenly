@@ -317,9 +317,6 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
     public async Task RemoveAsync(DisplayHandle handle, CancellationToken ct = default)
     {
         if (!_displays.TryGetValue(handle.Id, out var index)) return;
-        // Deactivate the display from the desktop topology before removal
-        try { SetDisplayConfig(0, IntPtr.Zero, 0, IntPtr.Zero, 0x00000001 | 0x00000080); } catch { } // SDC_TOPOLOGY_INTERNAL | SDC_APPLY
-        await Task.Delay(500);
         // Stop ping thread before removal (UPDATE ioctls interfere)
         StopPing();
         await Task.Delay(200);
