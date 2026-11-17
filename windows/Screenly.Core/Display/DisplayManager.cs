@@ -275,6 +275,12 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
     {
         var h = OpenHandle();
         if (h == IntPtr.Zero) throw new InvalidOperationException("Parsec VDD device not found (driver not installed?)");
+        // Clean up stale displays from previous (crashed) runs synchronously
+        // before creating a new one, to prevent ghost VDD accumulation.
+        if (_displays.Count == 0)
+        {
+            try { CleanupStaleIndices(); } catch { }
+        }
         // Ensure registry preset so driver creates display at requested resolution
         try
         {
@@ -311,13 +317,20 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
         if (!_displays.TryGetValue(handle.Id, out var index)) return;
         // Stop ping thread before removal (UPDATE ioctls interfere)
         StopPing();
+        await Task.Delay(200);
         var inBuf = new byte[32];
         // official 16-bit big-endian index
         inBuf[0] = (byte)((index >> 8) & 0xFF);
         inBuf[1] = (byte)(index & 0xFF);
-        bool removed = IoControl(VDD_IOCTL_REMOVE, inBuf, null, 5000, 32, synchronous: false);
+        bool removed = false;
+        for (int attempt = 0; attempt < 3 && !removed; attempt++)
+        {
+            if (attempt > 0) { await Task.Delay(500); StopPing(); }
+            removed = IoControl(VDD_IOCTL_REMOVE, inBuf, null, 5000, 32, synchronous: true);
+            var werr2 = Marshal.GetLastWin32Error();
+            Log($"VDD REMOVE index {index} attempt {attempt + 1}: {(removed ? "success" : "FAILED")} Win32Error={werr2}");
+        }
         var werr = Marshal.GetLastWin32Error();
-        Log($"VDD REMOVE index {index}: {(removed ? "success" : "FAILED")} Win32Error={werr}");
         if (removed)
         {
             _displays.Remove(handle.Id);

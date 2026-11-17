@@ -156,9 +156,6 @@ public static class Program
         try { SetProcessDpiAwareness(2); } catch { try { SetProcessDPIAware(); } catch { } }
         var cfg = ConfigStore.Load();
         using var vddDriver = new ParsecVddDisplay();
-        // Clean up stale VDD displays from previous (crashed) runs in the background
-        // so normal display creation only opens one display without churn.
-        _ = Task.Run(() => { try { vddDriver.CleanupStaleIndices(); } catch { } });
 
         var displayLock = new SemaphoreSlim(1, 1);
         var sessionStates = new ConcurrentDictionary<Guid, SessionState>();
