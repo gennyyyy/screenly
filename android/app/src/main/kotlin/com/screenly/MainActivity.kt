@@ -103,7 +103,7 @@ fun ScreenlyApp(activity: Activity) {
                     if (!firstAttempt) kotlinx.coroutines.delay(2000)
                     firstAttempt = false
                     val host = "127.0.0.1"
-                    if (client.connect(host, 7543)) {
+                    if (client.connect(host, 5000)) {
                         val size = android.graphics.Point()
                         activity.windowManager.defaultDisplay.getRealSize(size)
                         val dm = activity.resources.displayMetrics

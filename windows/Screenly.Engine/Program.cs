@@ -526,7 +526,7 @@ public static class Program
                         }
                         foreach (var serial in serials)
                         {
-                            var psi = new System.Diagnostics.ProcessStartInfo(adb, $"-s {serial} reverse tcp:7543 tcp:{cfg.Port}")
+                            var psi = new System.Diagnostics.ProcessStartInfo(adb, $"-s {serial} reverse tcp:5000 tcp:{cfg.Port}")
                             {
                                 CreateNoWindow = true, UseShellExecute = false,
                                 RedirectStandardOutput = true, RedirectStandardError = true,

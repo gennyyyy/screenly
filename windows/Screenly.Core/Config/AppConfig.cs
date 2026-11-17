@@ -5,7 +5,7 @@ namespace Screenly.Core.Config;
 public sealed record AppConfig
 {
     public int Version { get; init; } = 1;
-    public int Port { get; init; } = 7543;
+    public int Port { get; init; } = 5000;
     public VirtualDisplayConfig VirtualDisplay { get; init; } = new();
     public EncodingConfig Encoding { get; init; } = new();
     public PairingConfig Pairing { get; init; } = new();
