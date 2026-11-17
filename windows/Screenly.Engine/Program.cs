@@ -562,6 +562,7 @@ public static class Program
         var lastStatusTime = DateTime.UtcNow;
         var loop = Task.Run(async () =>
         {
+            Log("frame loop started");
             while (!cts.IsCancellationRequested)
             {
                 var snapshot = sessionStates.ToArray();
