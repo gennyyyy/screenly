@@ -34,8 +34,8 @@ public sealed class H264Encoder : IDisposable
             var iid = IID_IUnknown;
             int hr = CoCreateInstance(ref clsid, IntPtr.Zero, CLSCTX_INPROC_SERVER, ref iid, out _mft);
             if (hr < 0 || _mft == IntPtr.Zero) throw new Exception($"CoCreateInstance hr={hr}");
-            // IMFTransform activation not yet working — MFT doesn't expose IMFTransform via IUnknown.
-            // Full MF COM interop pipeline still needed.
+            // IMFTransform activation not working — MFT doesn't expose IMFTransform via standard COM.
+            // Full MF COM interop pipeline still needed (requires reference implementation).
             _ready = false;
             InitError = "IMFTransform not accessible (MFT activation not implemented)";
         }
