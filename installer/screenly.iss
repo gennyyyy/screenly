@@ -25,6 +25,7 @@ Source: "..\app\Screenly.Engine.runtimeconfig.json"; DestDir: "{app}"; Flags: ig
 Source: "..\app\Screenly.Host.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\app\Screenly.Host.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\app\Screenly.Core.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\app\System.Drawing.Common.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\app\Screenly.Host.deps.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\app\Screenly.Host.runtimeconfig.json"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\driver\parsec-vdd\ParsecVDisplay-v0.45-setup.exe"; DestDir: "{tmp}"; Flags: deleteafterinstall
