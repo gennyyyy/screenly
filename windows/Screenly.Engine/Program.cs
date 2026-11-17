@@ -236,7 +236,19 @@ public static class Program
             }
             else
             {
-                state.Capture = null;
+                Log("CreateDisplayAt: no virtual display; falling back to primary screen capture.");
+                try
+                {
+                    var gc = new GdiCapture(70);
+                    gc.Start(0);
+                    state.Capture = gc;
+                    Log($"Fallback capture started: {gc.Width}x{gc.Height}");
+                }
+                catch (Exception ex)
+                {
+                    Log($"Fallback capture failed: {ex.Message}");
+                    state.Capture = null;
+                }
             }
         }
 

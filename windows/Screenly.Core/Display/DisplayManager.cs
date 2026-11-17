@@ -83,23 +83,17 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
 
     private IntPtr OpenHandle(bool overlapped = true)
     {
-        if (overlapped)
-        {
-            if (_handle != IntPtr.Zero) return _handle;
-            var path = @"\\?\ROOT#DISPLAY#0000#{00b41627-04c4-429e-a26e-0265cf50c8fa}";
-            var h = CreateFile(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, IntPtr.Zero);
-            if (h != new IntPtr(-1)) { _handle = h; return h; }
-            return IntPtr.Zero;
-        }
+        // Always use synchronous (non-overlapped) handle — device may not support overlapped I/O.
         if (_syncHandle != IntPtr.Zero) return _syncHandle;
-        var spath = @"\\?\ROOT#DISPLAY#0000#{00b41627-04c4-429e-a26e-0265cf50c8fa}";
-        var sh = CreateFile(spath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
-        if (sh != new IntPtr(-1)) { _syncHandle = sh; return sh; }
+        var path = @"\\?\ROOT#DISPLAY#0000#{00b41627-04c4-429e-a26e-0265cf50c8fa}";
+        var sh = CreateFile(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
+        if (sh != new IntPtr(-1)) { _syncHandle = sh; _handle = sh; return sh; }
+        Log($"OpenHandle failed: path={path} err={Marshal.GetLastWin32Error()}");
         return IntPtr.Zero;
     }
 
     // IoControl with overlapped pattern per docs; synchronous=true uses a non-overlapped handle
-    private bool IoControl(uint code, byte[]? inBuf, byte[]? outBuf, uint timeoutMs, int inBufferSize = 32, bool synchronous = false)
+    private bool IoControl(uint code, byte[]? inBuf, byte[]? outBuf, uint timeoutMs, int inBufferSize = 32, bool synchronous = true)
     {
         if (inBufferSize < 1) inBufferSize = 1;
         var h = OpenHandle(!synchronous);
