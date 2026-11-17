@@ -86,13 +86,13 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
         if (overlapped)
         {
             if (_handle != IntPtr.Zero) return _handle;
-            var path = @"\\?\ROOT#DISPLAY#0000#{00b41627-04c4-429e-a26e-0265cf50c8fa}";
+            var path = @"\\?\ROOT#DISPLAY#0001#{00b41627-04c4-429e-a26e-0265cf50c8fa}";
             var h = CreateFile(path, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, FILE_FLAG_OVERLAPPED, IntPtr.Zero);
             if (h != new IntPtr(-1)) { _handle = h; return h; }
             return IntPtr.Zero;
         }
         if (_syncHandle != IntPtr.Zero) return _syncHandle;
-        var spath = @"\\?\ROOT#DISPLAY#0000#{00b41627-04c4-429e-a26e-0265cf50c8fa}";
+        var spath = @"\\?\ROOT#DISPLAY#0001#{00b41627-04c4-429e-a26e-0265cf50c8fa}";
         var sh = CreateFile(spath, GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, IntPtr.Zero, OPEN_EXISTING, 0, IntPtr.Zero);
         if (sh != new IntPtr(-1)) { _syncHandle = sh; return sh; }
         return IntPtr.Zero;
