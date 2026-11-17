@@ -463,8 +463,28 @@ public static class Program
             }
             catch (Exception ex) { Log($"MessageHandler error: {ex}"); }
         };
-        server.Start();
-        Log($"listening on port {cfg.Port}");
+        for (int attempt = 1; attempt <= 5; attempt++)
+        {
+            try
+            {
+                server.Start();
+                Log($"listening on port {cfg.Port}");
+                break;
+            }
+            catch (Exception ex)
+            {
+                Log($"TcpListener.Start failed on port {cfg.Port} (attempt {attempt}/5): {ex.Message}");
+                if (attempt < 5)
+                {
+                    try { await Task.Delay(3000); } catch { }
+                }
+                else
+                {
+                    Log("Engine exiting: unable to bind port.");
+                    return;
+                }
+            }
+        }
         var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
         // Auto-set up USB reverse tunnel for the entire engine lifetime (never give up)
