@@ -11,7 +11,7 @@ public sealed class H264Encoder : IDisposable
     [DllImport("mfplat.dll")] private static extern int MFShutdown();
     [DllImport("ole32.dll")] private static extern int CoCreateInstance(ref Guid rclsid, IntPtr pUnkOuter, uint dwClsContext, ref Guid riid, out IntPtr ppv);
 
-    private static readonly Guid CLSID_MSH264EncoderMFT = new("6CA5046C-868E-4E62-8970-4C840E11C3D6");
+    private static readonly Guid CLSID_MSH264EncoderMFT = new("6ca50344-051a-4ded-9779-a43305165e35");
     private static readonly Guid IID_IUnknown = new("00000000-0000-0000-C000-000000000046");
     private const uint CLSCTX_INPROC_SERVER = 1;
     private const uint MF_VERSION = 0x00020070;
