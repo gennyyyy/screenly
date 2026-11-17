@@ -217,8 +217,8 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
     {
         var h = OpenHandle();
         if (h == IntPtr.Zero) throw new InvalidOperationException("Parsec VDD device not found (driver not installed?)");
-        // Stale cleanup disabled for multi-device: only startup cleanup handles orphans.
-        if (false) try
+        // Clean up stale displays from previous (crashed) runs only when no displays are active.
+        if (_displays.Count == 0) try
         {
             var indices = new List<int>();
             if (File.Exists(IndicesPath))
