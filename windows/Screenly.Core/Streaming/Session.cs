@@ -15,6 +15,16 @@ public sealed class Session : IAsyncDisposable
     public Session(TcpClient client)
     {
         Client = client;
+        try
+        {
+            client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+            // Set keepalive interval to 5s to detect dead connections faster
+            // and prevent intermediate NAT/firewall from dropping idle connections.
+            client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 5);
+            client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, 1);
+            client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, 3);
+        }
+        catch { }
         Stream = client.GetStream();
     }
 
