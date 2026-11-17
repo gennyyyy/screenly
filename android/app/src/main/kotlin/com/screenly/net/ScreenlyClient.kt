@@ -30,6 +30,9 @@ class ScreenlyClient {
     private val _events = MutableSharedFlow<ServerEvent>(extraBufferCapacity = 64)
     val events: SharedFlow<ServerEvent> = _events
 
+    data class CursorPosState(val x: Int, val y: Int, val visible: Boolean)
+    val cursorPosState = MutableStateFlow<CursorPosState?>(null)
+
     suspend fun connect(host: String, port: Int): Boolean = withContext(Dispatchers.IO) {
         close() // close previous connection
         try {
@@ -113,7 +116,9 @@ class ScreenlyClient {
                     val y = bb.int
                     val visible = bb.get().toInt() == 1
                     val ts = bb.long
-                    _events.tryEmit(ServerEvent.CursorPos(x, y, visible, ts))
+                    // Use StateFlow for conflation: only the latest cursor pos is kept,
+                    // avoiding queue buildup and choppy cursor movement.
+                    cursorPosState.value = CursorPosState(x, y, visible)
                 }
             }
             Protocol.CURSOR_SHAPE -> {
