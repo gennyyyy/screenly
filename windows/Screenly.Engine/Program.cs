@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Runtime.InteropServices;
+using System.Collections.Concurrent;
 using Screenly.Core.Capture;
 using Screenly.Core.Config;
 using Screenly.Core.Encoding;
@@ -65,6 +66,19 @@ public static class DisplayHelper
     public const int DISP_CHANGE_SUCCESSFUL = 0;
 }
 
+public sealed class SessionState
+{
+    public DisplayManager Display { get; set; } = default!;
+    public ICapture? Capture { get; set; }
+    public H264Encoder? Encoder { get; set; }
+    public bool UseH264 { get; set; }
+    public string DeviceId { get; set; } = "unknown";
+    public int Width { get; set; }
+    public int Height { get; set; }
+    public int LastConfigW { get; set; }
+    public int LastConfigH { get; set; }
+}
+
 public static class Program
 {
     [StructLayout(LayoutKind.Sequential)]
@@ -124,26 +138,20 @@ public static class Program
         // Ensure DPI awareness before any display APIs
         try { SetProcessDpiAwareness(2); } catch { try { SetProcessDPIAware(); } catch { } }
         var cfg = ConfigStore.Load();
-        using var display = new DisplayManager(new ParsecVddDisplay());
+        using var vddDriver = new ParsecVddDisplay();
 
-        DisplayHandle vddHandle = default;
-        bool displayCreated = false;
-        bool recreating = false;
         var displayLock = new SemaphoreSlim(1, 1);
-        ICapture? capture = null;
-        byte[]? currentShapePayload = null;
-        H264Encoder? encoder = null;
-        bool useH264 = (cfg.Encoding.Codec ?? "jpeg").Equals("h264", StringComparison.OrdinalIgnoreCase);
-        string? lastDeviceId = null;
+        var sessionStates = new ConcurrentDictionary<Guid, SessionState>();
         string requestedCodec = (cfg.Encoding.Codec ?? "jpeg").ToLowerInvariant();
+        byte[]? currentShapePayload = null;
 
-        async Task CreateCaptureAsync(int width, int height)
+        async Task CreateCaptureForState(SessionState state)
         {
-            try { capture?.Stop(); } catch { }
-            capture?.Dispose();
-            capture = null;
-            encoder?.Dispose();
-            encoder = null;
+            try { state.Capture?.Stop(); } catch { }
+            state.Capture?.Dispose();
+            state.Capture = null;
+            state.Encoder?.Dispose();
+            state.Encoder = null;
             await Task.CompletedTask;
 
             if (requestedCodec == "h264")
@@ -157,9 +165,9 @@ public static class Program
                     enc.Initialize(dc.Width, dc.Height,
                         cfg.Encoding.TargetFps, cfg.Encoding.BitrateKbps);
                     if (!enc.IsReady) throw new Exception("H264 encoder init failed");
-                    encoder = enc;
-                    useH264 = true;
-                    capture = dc;
+                    state.Encoder = enc;
+                    state.UseH264 = true;
+                    state.Capture = dc;
                     Log($"H264 mode: DXGI capture {dc.Width}x{dc.Height}");
                 }
                 catch (Exception ex)
@@ -167,29 +175,30 @@ public static class Program
                     Log($"H264 init failed ({ex.Message}); falling back to JPEG.");
                     dc.Dispose();
                     enc?.Dispose();
-                    encoder = null;
-                    useH264 = false;
+                    state.Encoder = null;
+                    state.UseH264 = false;
                     var gc = new GdiCapture(30);
                     gc.Start(0);
-                    capture = gc;
+                    state.Capture = gc;
                 }
             }
             else
             {
                 var gc = new GdiCapture(70);
                 gc.Start(0);
-                capture = gc;
+                state.Capture = gc;
+                state.UseH264 = false;
             }
-            // capture stays as-is (fallback)
         }
 
-        async Task CreateDisplayAt(int width, int height)
+        async Task CreateDisplayForState(SessionState state, DisplayManager dm, int width, int height)
         {
             bool created = false;
             try
             {
-                vddHandle = await display.CreateAsync(width, height, cfg.VirtualDisplay.RefreshHz);
-                Log($"CreateAsync result: success, handle {vddHandle.Id} ({width}x{height})");
+                if (sessionStates.Count > 1) await Task.Delay(3000);
+                var handle = await dm.CreateAsync(width, height, cfg.VirtualDisplay.RefreshHz);
+                Log($"CreateAsync result: success, handle {handle.Id} ({width}x{height})");
                 created = true;
                 var devName = GdiCapture.FindVirtualDisplayDevicePublic();
                 if (devName != null)
@@ -219,204 +228,202 @@ public static class Program
             catch (Exception ex)
             {
                 Log($"CreateAsync failed ({ex.Message}); falling back to primary capture (no VDD retry).");
-                vddHandle = default;
                 created = false;
             }
             if (created)
             {
-                await CreateCaptureAsync(width, height);
+                await CreateCaptureForState(state);
             }
             else
             {
-                Log("CreateDisplayAt: no virtual display; NO capture (testing).");
-                capture = null;
-                displayCreated = false;
+                state.Capture = null;
             }
         }
 
-        async Task RecreateTo(int width, int height, string? deviceId)
+        async Task RecreateSessionAsync(Session session, SessionState state, int tw, int th)
         {
-            recreating = true;
+            try { await state.Display.RemoveAsync(); } catch (Exception ex) { Log($"Recreate: RemoveAsync FAILED ({ex.Message}); proceeding"); }
             await Task.Delay(100);
-            try
-            {
-                await display.RemoveAsync();
-                Log("RecreateTo: RemoveAsync result: success");
-            }
-            catch (Exception ex)
-            {
-                Log($"RecreateTo: RemoveAsync result: FAILED ({ex.Message}); proceeding to create (orphan accepted)");
-            }
-            vddHandle = default;
+            state.Capture?.Stop();
+            try { } catch { }
+            state.Capture?.Dispose();
+            state.Capture = null;
+            state.Encoder?.Dispose();
+            state.Encoder = null;
             await Task.Delay(500);
-            await CreateDisplayAt(width, height);
-            displayCreated = true;
-            Log($"RecreateTo: display count = {display.DisplayCount}");
-            if (deviceId != null)
+            await CreateDisplayForState(state, state.Display, tw, th);
+            state.Width = state.Capture?.Width ?? tw;
+            state.Height = state.Capture?.Height ?? th;
+            if (state.Capture != null)
             {
                 var map = LoadPersistedResolutions();
-                map[deviceId] = (width, height);
+                map[state.DeviceId] = (tw, th);
                 SavePersistedResolutions(map);
             }
-            recreating = false;
-        }
-
-        async Task EnsureDisplayForClient(string deviceId, int clientW, int clientH)
-        {
-            await displayLock.WaitAsync();
-            try
-            {
-            Log($"EnsureDisplayForClient: deviceId={deviceId} clientW={clientW} clientH={clientH} displayCreated={displayCreated}");
-            var dyn = cfg.VirtualDisplay.DynamicResolution;
-            int capW = cfg.VirtualDisplay.MaxWidth;
-            int capH = cfg.VirtualDisplay.MaxHeight;
-
-            if (!displayCreated)
-            {
-                var map = LoadPersistedResolutions();
-                int targetW, targetH;
-                if (clientW > 0 && clientH > 0)
-                {
-                    (targetW, targetH) = CapResolution(clientW, clientH, capW, capH);
-                    Log($"EnsureDisplayForClient: first-connect creating directly at capped client res {targetW}x{targetH}");
-                }
-                else if (map.TryGetValue(deviceId, out var persisted))
-                {
-                    targetW = persisted.w;
-                    targetH = persisted.h;
-                }
-                else
-                {
-                    targetW = cfg.VirtualDisplay.Width;
-                    targetH = cfg.VirtualDisplay.Height;
-                }
-                await CreateDisplayAt(targetW, targetH);
-                if (capture != null) displayCreated = true;
-                map[deviceId] = (targetW, targetH);
-                SavePersistedResolutions(map);
-                return;
-            }
-
-            // Keep the current display for all clients (no auto-recreate on device switch).
-            // New devices letterbox; resolution changes only via explicit CONFIG.
-            if (capture == null) { await EnsureDisplayForClient(deviceId, clientW, clientH); return; }
-            }
-            finally { displayLock.Release(); }
         }
 
         var server = new StreamServer(cfg.Port);
         server.ClientConnected += s => Log($"Client connected: {s.Id}");
-        server.ClientDisconnected += s => Log($"Client disconnected: {s.Id}");
+        server.ClientDisconnected += s =>
+        {
+            Log($"Client disconnected: {s.Id}");
+            if (sessionStates.TryRemove(s.Id, out var st))
+            {
+                try { st.Capture?.Stop(); } catch { }
+                st.Capture?.Dispose();
+                st.Encoder?.Dispose();
+                try { st.Display.RemoveAsync().GetAwaiter().GetResult(); } catch { }
+            }
+        };
         server.MessageHandler = async (session, type, payload) =>
         {
             try
             {
-            switch (type)
-            {
-                case MessageType.Hello:
-                    Log("HELLO received");
-                    string deviceId = "unknown";
-                    int clientW = 0, clientH = 0;
-                    try
-                    {
-                        if (payload.Length > 0)
+                switch (type)
+                {
+                    case MessageType.Hello:
+                        Log("HELLO received");
+                        string deviceId = "unknown";
+                        int clientW = 0, clientH = 0;
+                        try
                         {
-                            using var doc = JsonDocument.Parse(payload);
-                            var root = doc.RootElement;
-                            if (root.TryGetProperty("deviceId", out var d) && d.ValueKind == JsonValueKind.String)
-                                deviceId = d.GetString() ?? deviceId;
-                            if (root.TryGetProperty("screenWidth", out var sw)) clientW = sw.GetInt32();
-                            else if (root.TryGetProperty("width", out var w)) clientW = w.GetInt32();
-                            if (root.TryGetProperty("screenHeight", out var sh)) clientH = sh.GetInt32();
-                            else if (root.TryGetProperty("height", out var h)) clientH = h.GetInt32();
+                            if (payload.Length > 0)
+                            {
+                                using var doc = JsonDocument.Parse(payload);
+                                var root = doc.RootElement;
+                                if (root.TryGetProperty("deviceId", out var d) && d.ValueKind == JsonValueKind.String)
+                                    deviceId = d.GetString() ?? deviceId;
+                                if (root.TryGetProperty("screenWidth", out var sw)) clientW = sw.GetInt32();
+                                else if (root.TryGetProperty("width", out var w)) clientW = w.GetInt32();
+                                if (root.TryGetProperty("screenHeight", out var sh)) clientH = sh.GetInt32();
+                                else if (root.TryGetProperty("height", out var h)) clientH = h.GetInt32();
+                            }
                         }
-                    }
-                    catch { }
-                    session.HasHandshaked = true;
-                    lastDeviceId = deviceId;
-                    Log($"HELLO parsed: deviceId={deviceId} clientW={clientW} clientH={clientH}");
-                    await EnsureDisplayForClient(deviceId, clientW, clientH);
+                        catch { }
+                        session.HasHandshaked = true;
+                        Log($"HELLO parsed: deviceId={deviceId} clientW={clientW} clientH={clientH}");
 
-                    var activeCodecNow = useH264 ? "h264" : "jpeg";
-                    var cw = capture?.Width ?? cfg.VirtualDisplay.Width;
-                    var ch = capture?.Height ?? cfg.VirtualDisplay.Height;
-                    var ack = new { status = "ok", sessionId = session.Id.ToString(), pairingToken = (string?)null, config = new { width = cw, height = ch, fps = cfg.Encoding.TargetFps, bitrateKbps = cfg.Encoding.BitrateKbps, codec = activeCodecNow } };
-                    var ackJson = JsonSerializer.Serialize(ack);
-                    await session.SendAsync(MessageType.HelloAck, Encoding.UTF8.GetBytes(ackJson));
-                    Log("HELLO_ACK sent");
-                    if (currentShapePayload != null)
-                    {
-                        try { await session.SendAsync(MessageType.CursorShape, currentShapePayload); } catch { }
-                    }
-                    try
-                    {
-                        var ci2 = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
-                        byte[] pp;
-                        if (GetCursorInfo(ref ci2))
+                        var capW = cfg.VirtualDisplay.MaxWidth;
+                        var capH = cfg.VirtualDisplay.MaxHeight;
+                        int targetW, targetH;
+                        if (clientW > 0 && clientH > 0)
                         {
-                            var cap2 = capture;
-                            int mx2 = cap2?.MonitorX ?? 0;
-                            int my2 = cap2?.MonitorY ?? 0;
-                            int w2 = cap2?.Width ?? 0;
-                            int h2 = cap2?.Height ?? 0;
-                            int rx2 = ci2.ptScreenPos.x - mx2;
-                            int ry2 = ci2.ptScreenPos.y - my2;
-                            int x2 = rx2 < 0 ? 0 : (w2 > 0 && rx2 > w2 ? w2 : rx2);
-                            int y2 = ry2 < 0 ? 0 : (h2 > 0 && ry2 > h2 ? h2 : ry2);
-                            bool vis2 = (ci2.flags & CURSOR_SHOWING) != 0 && (w2 <= 0 || h2 <= 0 || (rx2 >= 0 && rx2 <= w2 && ry2 >= 0 && ry2 <= h2));
-                            pp = new byte[17];
-                            BitConverter.TryWriteBytes(pp.AsSpan(0, 4), x2);
-                            BitConverter.TryWriteBytes(pp.AsSpan(4, 4), y2);
-                            pp[8] = (byte)(vis2 ? 1 : 0);
-                            BitConverter.TryWriteBytes(pp.AsSpan(9, 8), (ulong)DateTime.UtcNow.Ticks);
+                            (targetW, targetH) = CapResolution(clientW, clientH, capW, capH);
+                            Log($"HELLO: creating at capped client res {targetW}x{targetH}");
                         }
                         else
                         {
-                            pp = new byte[17];
+                            var map = LoadPersistedResolutions();
+                            if (map.TryGetValue(deviceId, out var persisted))
+                            {
+                                targetW = persisted.w;
+                                targetH = persisted.h;
+                            }
+                            else
+                            {
+                                targetW = cfg.VirtualDisplay.Width;
+                                targetH = cfg.VirtualDisplay.Height;
+                            }
                         }
-                        await session.SendAsync(MessageType.CursorPos, pp);
-                    }
-                    catch { }
-                    break;
-                case MessageType.Ping:
-                    await session.SendAsync(MessageType.Pong, Array.Empty<byte>());
-                    break;
-                case MessageType.Config:
-                    Log("CONFIG received");
-                    int rw = 0, rh = 0;
-                    try
-                    {
-                        if (payload.Length > 0)
+
+                        var state = new SessionState { DeviceId = deviceId };
+                        state.Display = new DisplayManager(vddDriver);
+                        await displayLock.WaitAsync();
+                        try
                         {
-                            using var doc = JsonDocument.Parse(payload);
-                            var root = doc.RootElement;
-                            if (root.TryGetProperty("width", out var w)) rw = w.GetInt32();
-                            else if (root.TryGetProperty("screenWidth", out var sw)) rw = sw.GetInt32();
-                            if (root.TryGetProperty("height", out var h)) rh = h.GetInt32();
-                            else if (root.TryGetProperty("screenHeight", out var sh)) rh = sh.GetInt32();
+                            await CreateDisplayForState(state, state.Display, targetW, targetH);
+                            if (state.Capture != null)
+                            {
+                                var m = LoadPersistedResolutions();
+                                m[deviceId] = (targetW, targetH);
+                                SavePersistedResolutions(m);
+                            }
                         }
-                    }
-                    catch { }
-                    if (rw > 0 && rh > 0 && displayCreated)
-                    {
-                        int tw, th;
-                        if (cfg.VirtualDisplay.DynamicResolution)
-                            (tw, th) = CapResolution(rw, rh, cfg.VirtualDisplay.MaxWidth, cfg.VirtualDisplay.MaxHeight);
-                        else { tw = cfg.VirtualDisplay.Width; th = cfg.VirtualDisplay.Height; }
-                        if (capture == null || capture.Width != tw || capture.Height != th)
+                        finally { displayLock.Release(); }
+                        state.Width = state.Capture?.Width ?? targetW;
+                        state.Height = state.Capture?.Height ?? targetH;
+                        sessionStates[session.Id] = state;
+
+                        var activeCodecNow = state.UseH264 ? "h264" : "jpeg";
+                        var cw = state.Capture?.Width ?? cfg.VirtualDisplay.Width;
+                        var ch = state.Capture?.Height ?? cfg.VirtualDisplay.Height;
+                        var ack = new { status = "ok", sessionId = session.Id.ToString(), pairingToken = (string?)null, config = new { width = cw, height = ch, fps = cfg.Encoding.TargetFps, bitrateKbps = cfg.Encoding.BitrateKbps, codec = activeCodecNow } };
+                        var ackJson = JsonSerializer.Serialize(ack);
+                        await session.SendAsync(MessageType.HelloAck, Encoding.UTF8.GetBytes(ackJson));
+                        Log("HELLO_ACK sent");
+                        if (currentShapePayload != null)
                         {
-                            await RecreateTo(tw, th, lastDeviceId);
+                            try { await session.SendAsync(MessageType.CursorShape, currentShapePayload); } catch { }
                         }
-                    }
-                    await session.SendAsync(MessageType.Config, payload);
-                    break;
-                case MessageType.InputTouch:
-                case MessageType.InputKey:
-                    break;
-                case MessageType.Disconnect:
-                    Log("Client disconnect requested");
-                    break;
-            }
+                        try
+                        {
+                            var ci2 = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
+                            byte[] pp;
+                            if (GetCursorInfo(ref ci2))
+                            {
+                                var cap2 = state.Capture;
+                                int mx2 = cap2?.MonitorX ?? 0;
+                                int my2 = cap2?.MonitorY ?? 0;
+                                int w2 = cap2?.Width ?? 0;
+                                int h2 = cap2?.Height ?? 0;
+                                int rx2 = ci2.ptScreenPos.x - mx2;
+                                int ry2 = ci2.ptScreenPos.y - my2;
+                                int x2 = rx2 < 0 ? 0 : (w2 > 0 && rx2 > w2 ? w2 : rx2);
+                                int y2 = ry2 < 0 ? 0 : (h2 > 0 && ry2 > h2 ? h2 : ry2);
+                                bool vis2 = (ci2.flags & CURSOR_SHOWING) != 0 && (w2 <= 0 || h2 <= 0 || (rx2 >= 0 && rx2 <= w2 && ry2 >= 0 && ry2 <= h2));
+                                pp = new byte[17];
+                                BitConverter.TryWriteBytes(pp.AsSpan(0, 4), x2);
+                                BitConverter.TryWriteBytes(pp.AsSpan(4, 4), y2);
+                                pp[8] = (byte)(vis2 ? 1 : 0);
+                                BitConverter.TryWriteBytes(pp.AsSpan(9, 8), (ulong)DateTime.UtcNow.Ticks);
+                            }
+                            else
+                            {
+                                pp = new byte[17];
+                            }
+                            await session.SendAsync(MessageType.CursorPos, pp);
+                        }
+                        catch { }
+                        break;
+                    case MessageType.Ping:
+                        await session.SendAsync(MessageType.Pong, Array.Empty<byte>());
+                        break;
+                    case MessageType.Config:
+                        Log("CONFIG received");
+                        int rw = 0, rh = 0;
+                        try
+                        {
+                            if (payload.Length > 0)
+                            {
+                                using var doc = JsonDocument.Parse(payload);
+                                var root = doc.RootElement;
+                                if (root.TryGetProperty("width", out var w)) rw = w.GetInt32();
+                                else if (root.TryGetProperty("screenWidth", out var sw)) rw = sw.GetInt32();
+                                if (root.TryGetProperty("height", out var h)) rh = h.GetInt32();
+                                else if (root.TryGetProperty("screenHeight", out var sh)) rh = sh.GetInt32();
+                            }
+                        }
+                        catch { }
+                        if (sessionStates.TryGetValue(session.Id, out var st) && rw > 0 && rh > 0 && st.Capture != null)
+                        {
+                            int tw, th;
+                            if (cfg.VirtualDisplay.DynamicResolution)
+                                (tw, th) = CapResolution(rw, rh, cfg.VirtualDisplay.MaxWidth, cfg.VirtualDisplay.MaxHeight);
+                            else { tw = cfg.VirtualDisplay.Width; th = cfg.VirtualDisplay.Height; }
+                            if (st.Capture == null || st.Capture.Width != tw || st.Capture.Height != th)
+                            {
+                                await RecreateSessionAsync(session, st, tw, th);
+                            }
+                        }
+                        await session.SendAsync(MessageType.Config, payload);
+                        break;
+                    case MessageType.InputTouch:
+                    case MessageType.InputKey:
+                        break;
+                    case MessageType.Disconnect:
+                        Log("Client disconnect requested");
+                        break;
+                }
             }
             catch (Exception ex) { Log($"MessageHandler error: {ex}"); }
         };
@@ -492,111 +499,91 @@ public static class Program
         // Capture + stream loop (~30 fps)
         uint seq = 0;
         uint frameCounter = 0;
-        int lastConfigW = 0, lastConfigH = 0;
         var loop = Task.Run(async () =>
         {
             while (!cts.IsCancellationRequested)
             {
-                if (recreating)
+                var snapshot = sessionStates.ToArray();
+                foreach (var kv in snapshot)
                 {
-                    try { await Task.Delay(50, cts.Token); } catch (OperationCanceledException) { break; }
-                    continue;
-                }
-                var cap = capture;
-                if (cap == null)
-                {
-                    try { await Task.Delay(100, cts.Token); } catch (OperationCanceledException) { break; }
-                    continue;
-                }
-                // Throttled dimension refresh (~every 30 frames)
-                if (frameCounter % 30 == 0)
-                {
-                    bool changed = false;
-                    try { changed = cap.RefreshDimensions(); } catch { }
-                    if (changed)
+                    var sess = server.Sessions.FirstOrDefault(s => s.Id == kv.Key);
+                    if (sess == null || !sess.HasHandshaked) continue;
+                    var st = kv.Value;
+                    var cap = st.Capture;
+                    if (cap == null) continue;
+
+                    // Throttled dimension refresh (~every 30 frames)
+                    if (frameCounter % 30 == 0)
                     {
-                        Log($"dimension change: {cap.Width}x{cap.Height}");
-                        // H264 path: reinit encoder; fall back to JPEG on failure
-                        if (useH264 && encoder != null)
+                        bool changed = false;
+                        try { changed = cap.RefreshDimensions(); } catch { }
+                        if (changed)
                         {
-                            try
+                            Log($"dimension change: {cap.Width}x{cap.Height}");
+                            if (st.UseH264 && st.Encoder != null)
                             {
-                                encoder.Dispose();
-                                var newEnc = new H264Encoder();
-                                newEnc.Initialize(cap.Width, cap.Height, cfg.Encoding.TargetFps, cfg.Encoding.BitrateKbps);
-                                if (!newEnc.IsReady) throw new Exception("H264 reinit failed");
-                                encoder = newEnc;
+                                try
+                                {
+                                    st.Encoder.Dispose();
+                                    var newEnc = new H264Encoder();
+                                    newEnc.Initialize(cap.Width, cap.Height, cfg.Encoding.TargetFps, cfg.Encoding.BitrateKbps);
+                                    if (!newEnc.IsReady) throw new Exception("H264 reinit failed");
+                                    st.Encoder = newEnc;
+                                }
+                                catch (Exception ex)
+                                {
+                                    Log($"H264 reinit failed ({ex.Message}); falling back to JPEG.");
+                                    st.Encoder?.Dispose();
+                                    st.Encoder = null;
+                                    st.UseH264 = false;
+                                    try { st.Capture?.Stop(); } catch { }
+                                    st.Capture?.Dispose();
+                                    var gc = new GdiCapture(30);
+                                    gc.Start(0);
+                                    st.Capture = gc;
+                                    cap = gc;
+                                }
                             }
-                            catch (Exception ex)
+                            var activeCodecNow = st.UseH264 ? "h264" : "jpeg";
+                            var cw = cap?.Width ?? cfg.VirtualDisplay.Width;
+                            var ch = cap?.Height ?? cfg.VirtualDisplay.Height;
+                            if (cw != st.LastConfigW || ch != st.LastConfigH)
                             {
-                                Log($"H264 reinit failed ({ex.Message}); falling back to JPEG.");
-                                // ponytail: full capture reinit not wired; switch to GDI JPEG capture
-                                encoder?.Dispose();
-                                encoder = null;
-                                useH264 = false;
-                                try { capture?.Stop(); } catch { }
-                                capture?.Dispose();
-                                var gc = new GdiCapture(30);
-                                gc.Start(0);
-                                capture = gc;
-                                cap = gc;
-                            }
-                        }
-                        var activeCodecNow = useH264 ? "h264" : "jpeg";
-                        var cw = cap?.Width ?? cfg.VirtualDisplay.Width;
-                        var ch = cap?.Height ?? cfg.VirtualDisplay.Height;
-                        if (cw != lastConfigW || ch != lastConfigH)
-                        {
-                            lastConfigW = cw; lastConfigH = ch;
-                            var configJson = JsonSerializer.Serialize(new { width = cw, height = ch, fps = cfg.Encoding.TargetFps, bitrateKbps = cfg.Encoding.BitrateKbps, codec = activeCodecNow });
-                            var configBytes = Encoding.UTF8.GetBytes(configJson);
-                            foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
-                            {
-                                try { await s.SendAsync(MessageType.Config, configBytes); } catch { }
+                                st.LastConfigW = cw; st.LastConfigH = ch;
+                                var configJson = JsonSerializer.Serialize(new { width = cw, height = ch, fps = cfg.Encoding.TargetFps, bitrateKbps = cfg.Encoding.BitrateKbps, codec = activeCodecNow });
+                                var configBytes = Encoding.UTF8.GetBytes(configJson);
+                                try { await sess.SendAsync(MessageType.Config, configBytes); } catch { }
                             }
                         }
                     }
-                }
-                frameCounter++;
-                cap = capture;
-                if (cap == null)
-                {
-                    try { await Task.Delay(100, cts.Token); } catch (OperationCanceledException) { break; }
-                    continue;
-                }
-                if (useH264 && encoder != null)
-                {
-                    if (cap.TryGetFrame(out var rawFrame))
+
+                    if (st.UseH264 && st.Encoder != null)
                     {
-                        if (seq % (uint)(cfg.Encoding.TargetFps * Math.Max(1, cfg.Encoding.KeyframeIntervalSec)) == 0) encoder.RequestKeyframe();
-                        var enc = encoder.Encode(rawFrame.JpegData, rawFrame.Width, rawFrame.Height, rawFrame.TimestampUs);
-                        if (enc != null)
+                        if (cap.TryGetFrame(out var rawFrame))
                         {
-                            var header = new VideoFrameHeader(seq++, enc.TimestampUs, (ushort)rawFrame.Width, (ushort)rawFrame.Height, enc.IsKeyframe, false);
-                            var msg = FrameCodec.Encode(header, enc.Data);
-                            foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
+                            if (seq % (uint)(cfg.Encoding.TargetFps * Math.Max(1, cfg.Encoding.KeyframeIntervalSec)) == 0) st.Encoder.RequestKeyframe();
+                            var enc = st.Encoder.Encode(rawFrame.JpegData, rawFrame.Width, rawFrame.Height, rawFrame.TimestampUs);
+                            if (enc != null)
                             {
-                                try { await s.SendAsync(MessageType.VideoFrame, msg); }
-                                catch { }
+                                var header = new VideoFrameHeader(seq++, enc.TimestampUs, (ushort)rawFrame.Width, (ushort)rawFrame.Height, enc.IsKeyframe, false);
+                                var msg = FrameCodec.Encode(header, enc.Data);
+                                try { await sess.SendAsync(MessageType.VideoFrame, msg); } catch { }
+                                if (seq % 100 == 0) Log($"frames sent: {seq}");
                             }
+                        }
+                    }
+                    else
+                    {
+                        if (cap.TryGetFrame(out var frame))
+                        {
+                            var header = new VideoFrameHeader(seq++, frame.TimestampUs, (ushort)frame.Width, (ushort)frame.Height, true, true);
+                            var msg = FrameCodec.Encode(header, frame.JpegData);
+                            try { await sess.SendAsync(MessageType.VideoFrame, msg); } catch { }
                             if (seq % 100 == 0) Log($"frames sent: {seq}");
                         }
                     }
                 }
-                else
-                {
-                    if (cap.TryGetFrame(out var frame))
-                    {
-                        var header = new VideoFrameHeader(seq++, frame.TimestampUs, (ushort)frame.Width, (ushort)frame.Height, true, true);
-                        var msg = FrameCodec.Encode(header, frame.JpegData);
-                        foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
-                        {
-                            try { await s.SendAsync(MessageType.VideoFrame, msg); }
-                            catch { }
-                        }
-                        if (seq % 100 == 0) Log($"frames sent: {seq}");
-                    }
-                }
+                frameCounter++;
                 try { await Task.Delay(33, cts.Token); } catch (OperationCanceledException) { break; }
             }
         }, cts.Token);
@@ -612,7 +599,8 @@ public static class Program
                     var ci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
                     if (GetCursorInfo(ref ci))
                     {
-                        var cap = capture;
+                        var firstState = sessionStates.Values.FirstOrDefault();
+                        var cap = firstState?.Capture;
                         int mx = cap?.MonitorX ?? 0;
                         int my = cap?.MonitorY ?? 0;
                         int w = cap?.Width ?? 0;
@@ -665,10 +653,14 @@ public static class Program
         try { await loop; } catch (OperationCanceledException) { }
         try { await cursorLoop; } catch (OperationCanceledException) { }
 
-        capture?.Stop();
-        capture?.Dispose();
-        encoder?.Dispose();
-        await display.RemoveAsync();
+        foreach (var kv in sessionStates.ToArray())
+        {
+            try { kv.Value.Capture?.Stop(); } catch { }
+            kv.Value.Capture?.Dispose();
+            kv.Value.Encoder?.Dispose();
+            try { kv.Value.Display.RemoveAsync().GetAwaiter().GetResult(); } catch { }
+        }
+        sessionStates.Clear();
         await server.DisposeAsync();
     }
 

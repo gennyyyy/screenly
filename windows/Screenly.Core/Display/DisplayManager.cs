@@ -223,8 +223,8 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
     {
         var h = OpenHandle();
         if (h == IntPtr.Zero) throw new InvalidOperationException("Parsec VDD device not found (driver not installed?)");
-        // Clean up ALL stale displays from previous (crashed) runs
-        try
+        // Stale cleanup disabled for multi-device: only startup cleanup handles orphans.
+        if (false) try
         {
             var indices = new List<int>();
             if (File.Exists(IndicesPath))
@@ -239,6 +239,7 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
             var remaining = new List<int>(indices.Distinct());
             foreach (var oldIdx in indices.Distinct().ToList())
             {
+                if (_displays.ContainsValue(oldIdx)) continue;
                 bool removed = false;
                 var buf = new byte[32];
                 // official 16-bit big-endian index
