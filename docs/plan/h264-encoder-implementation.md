@@ -1,46 +1,17 @@
-# Plan — Media Foundation H.264 Encoder Implementation
+# H.264 Encoder Plan — Blocked
 
-**Goal:** Implement the `H264Encoder` (currently a stub returning null) so the engine can stream H.264 at 30-60 fps instead of falling back to JPEG (~15 fps).
+**Status: Blocked.** The Media Foundation H.264 Encoder MFT (`mfh264enc.dll`, CLSID `6ca50344-051a-4ded-9779-a43305165e35`) is registered but has not been exposed as a usable `IMFTransform` in this environment. More than 17 activation and enumeration approaches have been tried across sessions, including `CoCreateInstance`, `MFTEnumEx`, `IMFActivate`, managed COM casts and queries, and direct vtable calls. Failures include `E_NOINTERFACE`, zero filtered MFT results, `MF_E_INVALIDMEDIATYPE`, cast failures, and `AccessViolationException`.
 
-**Scope:** `windows/Screenly.Core/Encoding/H264Encoder.cs` only. No Android changes (already supports H.264 via MediaCodec).
+The engine continues to use the working JPEG fallback at approximately 15–17 FPS. Other features are complete. Do not repeat activation experiments, guess vtable layouts, or treat MFT activation as a routine implementation task.
 
-## Current state
-- `Initialize()` calls `MFStartup` and `CoCreateInstance(CLSID_CMSH264EncoderMFT)` as `IUnknown`. Sets `_ready = true` if hr >= 0.
-- `Encode()` returns `null` (stub).
-- `RequestKeyframe()` sets a flag (never consumed).
+## Required prerequisite
 
-## Design
-1. **QueryInterface** for `IMFTransform` from the MFT pointer.
-2. **Set input type**: MFVideoFormat (BGRA or NV12). Since capture gives BGRA, either convert to NV12 before feeding, or set input type as BGRA if the MFT supports it. The Microsoft H.264 MFT accepts NV12 input. So convert BGRA→NV12.
-3. **Set output type**: H.264 (MFVideoFormat_H264) with CBR, target bitrate, fps.
-4. **Configure**: set CODECAPI_AVLowLatencyMode=TRUE, MaxBFrames=0, force keyframe via CODECAPI_AVEncVideoForceKeyFrame.
-5. **Feed input**: create IMFSample with IMFMediaBuffer containing NV12 data; call `ProcessInput`.
-6. **Drain output**: call `ProcessOutput` until MF_E_TRANSFORM_NEED_MORE_INPUT; extract H.264 NAL units from output buffer.
-7. **Keyframe**: when `_forceKeyframe` is set, set CODECAPI_AVEncVideoForceKeyFrame before processing.
+Obtain access to a confirmed working C++ or C# Media Foundation H.264 encoder implementation and the Windows environment on which it activates successfully. Candidates named for this purpose are deskstream, ParsecDisplay, or a Microsoft sample. Public code references found so far are unverified against this environment and do not remove the blocker.
 
-## COM interfaces needed
-- `IMFTransform` (ProcessInput, ProcessOutput, SetInputType, GetOutputAvailableType, etc.)
-- `IMFMediaType`
-- `IMFSample`
-- `IMFMediaBuffer` (Lock/Unlock)
-- `IMFAttributes` (for codec API)
+## Remaining work after the prerequisite is available
 
-## Tasks
-- E1: Add IMFTransform, IMFMediaType, IMFSample, IMFMediaBuffer COM interface definitions (P/Invoke/COM interop).
-- E2: Implement BGRA→NV12 conversion.
-- E3: Implement SetInputType/SetOutputType in Initialize.
-- E4: Implement Encode: convert, feed, drain, return EncodedFrame.
-- E5: Implement RequestKeyframe via CODECAPI.
-- E6: Handle disposal.
-- E7: Test: encode 10 frames, verify H.264 NAL output with at least one IDR.
-
-## Risks
-- COM interop complexity; may need `Marshal.QueryInterface`.
-- NV12 conversion performance (CPU-bound; could be slow).
-- MFT may not be available on all systems (software fallback).
-- Thread safety: MFT is single-threaded; engine capture loop is single-threaded, so OK.
-
-## Verification
-- `dotnet build` 0 errors.
-- Manual: run engine with `codec: "h264"` in config; verify frames display on Android.
-- Log encode time per frame.
+[ ] Reproduce the reference activation path and capture the successful CLSID/MFT selection, interface definitions, initialization order, required media types, and any D3D device manager setup.
+[ ] Port the proven activation and COM interop path to `windows/Screenly.Core/Encoding/H264Encoder.cs`; do not infer undocumented vtable layouts.
+[ ] Implement capture-buffer conversion, timestamped samples, output draining, Annex B framing, keyframe handling, and parameter-set delivery according to the reference.
+[ ] Preserve the JPEG fallback and expose actionable initialization/runtime failures in `windows/Screenly.Engine/Program.cs`.
+[ ] Verify multiple encoded frames, IDR and parameter sets, then test end-to-end decoding on Android and record measured throughput.

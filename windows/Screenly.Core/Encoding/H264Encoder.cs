@@ -1,64 +1,94 @@
 using System.Runtime.InteropServices;
+using H264Sharp;
 
 namespace Screenly.Core.Encoding;
 
 public sealed record EncodedFrame(byte[] Data, bool IsKeyframe, ulong TimestampUs);
 
-// Media Foundation H.264 encoder (CBR, no B-frames, low-latency). Uses COM interop only.
+// H.264 encoder using H264Sharp (Cisco OpenH264 wrapper).
 public sealed class H264Encoder : IDisposable
 {
-    [DllImport("mfplat.dll")] private static extern int MFStartup(uint version, uint dwFlags);
-    [DllImport("mfplat.dll")] private static extern int MFShutdown();
-    [DllImport("ole32.dll")] private static extern int CoCreateInstance(ref Guid rclsid, IntPtr pUnkOuter, uint dwClsContext, ref Guid riid, out IntPtr ppv);
-
-    // H264 Encoder MFT (from mfh264enc.dll, registered under MediaFoundation\Transforms)
-    private static readonly Guid CLSID_MSH264EncoderMFT = new("6ca50344-051a-4ded-9779-a43305165e35");
-    private static readonly Guid IID_IUnknown = new("00000000-0000-0000-C000-000000000046");
-    private const uint CLSCTX_INPROC_SERVER = 1;
-    private const uint MF_VERSION = 0x00020070;
-
+    private H264Sharp.H264Encoder? _encoder;
     private int _width, _height, _fps, _bitrateKbps;
-    private IntPtr _mft = IntPtr.Zero;
     private bool _ready;
     private bool _forceKeyframe;
     public bool IsReady => _ready;
-    public string? InitError { get; private set; }
 
     public void Initialize(int width, int height, int fps, int bitrateKbps)
     {
         _width = width; _height = height; _fps = fps; _bitrateKbps = bitrateKbps;
         try
         {
-            MFStartup(MF_VERSION, 0);
-            var clsid = CLSID_MSH264EncoderMFT;
-            var iid = IID_IUnknown;
-            int hr = CoCreateInstance(ref clsid, IntPtr.Zero, CLSCTX_INPROC_SERVER, ref iid, out _mft);
-            if (hr < 0 || _mft == IntPtr.Zero) throw new Exception($"CoCreateInstance hr={hr}");
-            // IMFTransform activation not working — MFT doesn't expose IMFTransform via standard COM.
-            // Full MF COM interop pipeline still needed (requires reference implementation).
-            _ready = false;
-            InitError = "IMFTransform not accessible (MFT activation not implemented)";
+            _encoder = new H264Sharp.H264Encoder();
+            var param = _encoder.GetDefaultParameters();
+            param.iUsageType = EUsageType.CAMERA_VIDEO_REAL_TIME;
+            param.iPicWidth = width;
+            param.iPicHeight = height;
+            param.iTargetBitrate = bitrateKbps * 1000;
+            param.iTemporalLayerNum = 1;
+            param.iSpatialLayerNum = 1;
+            param.sSpatialLayers[0].iVideoWidth = width;
+            param.sSpatialLayers[0].iVideoHeight = height;
+            param.sSpatialLayers[0].fFrameRate = fps;
+            param.sSpatialLayers[0].iSpatialBitrate = bitrateKbps * 1000;
+            param.sSpatialLayers[0].uiProfileIdc = EProfileIdc.PRO_BASELINE;
+            param.sSpatialLayers[0].uiLevelIdc = 0;
+            param.iComplexityMode = ECOMPLEXITY_MODE.LOW_COMPLEXITY;
+            param.uiIntraPeriod = 300;
+            param.bEnableFrameSkip = false;
+            _encoder.Initialize(param);
+            _ready = true;
         }
-        catch (Exception ex)
+        catch
         {
-            InitError = ex.Message;
             _ready = false;
+            _encoder = null;
         }
     }
 
     public EncodedFrame? Encode(byte[] bgra, int width, int height, ulong timestampUs)
     {
-        // Not implemented — requires full MF COM interop pipeline.
-        if (_forceKeyframe) _forceKeyframe = false;
-        return null;
+        if (!_ready || _encoder is null || bgra is null || bgra.Length < width * height * 4) return null;
+
+        try
+        {
+            if (_forceKeyframe)
+            {
+                _encoder.ForceIntraFrame();
+                _forceKeyframe = false;
+            }
+
+            var rgbIn = new RgbImage(ImageFormat.Bgra, width, height, bgra);
+            if (!_encoder.Encode(rgbIn, out var encodedFrames) || encodedFrames is null || encodedFrames.Length == 0)
+                return null;
+
+            var data = encodedFrames.GetAllBytes();
+            if (data is null || data.Length == 0) return null;
+
+            bool isKeyframe = false;
+            foreach (var f in encodedFrames)
+            {
+                if (f.FrameType == FrameType.IDR || f.FrameType == FrameType.I)
+                {
+                    isKeyframe = true;
+                    break;
+                }
+            }
+
+            return new EncodedFrame(data, isKeyframe, timestampUs);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public void RequestKeyframe() => _forceKeyframe = true;
 
     public void Dispose()
     {
-        if (_mft != IntPtr.Zero) { Marshal.Release(_mft); _mft = IntPtr.Zero; }
-        try { MFShutdown(); } catch { }
+        _encoder?.Dispose();
+        _encoder = null;
         _ready = false;
     }
 }

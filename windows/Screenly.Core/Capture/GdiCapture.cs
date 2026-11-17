@@ -225,6 +225,8 @@ public sealed class GdiCapture : ICapture
     private static string? FindVirtualDisplayDevice()
     {
         var dd = new DISPLAY_DEVICE { cb = Marshal.SizeOf<DISPLAY_DEVICE>() };
+        // Return the LAST Parsec device (most recently created) to handle multi-display.
+        string? last = null;
         uint i = 0;
         while (EnumDisplayDevices(null, i, ref dd, 0))
         {
@@ -234,12 +236,12 @@ public sealed class GdiCapture : ICapture
                     dd.DeviceName.Contains("Parsec", StringComparison.OrdinalIgnoreCase) ||
                     dd.DeviceID.Contains("Parsec", StringComparison.OrdinalIgnoreCase))
                 {
-                    return dd.DeviceName;
+                    last = dd.DeviceName;
                 }
             }
             i++;
             dd.cb = Marshal.SizeOf<DISPLAY_DEVICE>();
         }
-        return null;
+        return last;
     }
 }

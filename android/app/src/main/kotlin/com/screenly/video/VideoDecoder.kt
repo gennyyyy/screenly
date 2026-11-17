@@ -5,20 +5,35 @@ import android.media.MediaFormat
 import android.view.Surface
 import android.view.SurfaceHolder
 
-class VideoDecoder(private val holder: SurfaceHolder) {
+class VideoDecoder(private val holder: SurfaceHolder) : SurfaceHolder.Callback {
     private var codec: MediaCodec? = null
     private var width = 0
     private var height = 0
     private var pendingFrame: Triple<ByteArray, Long, Boolean>? = null
+    private var pendingConfig: Pair<Int, Int>? = null
+
+    init { holder.addCallback(this) }
+
+    override fun surfaceCreated(holder: SurfaceHolder) {
+        pendingConfig?.let { (w, h) -> configure(w, h) }
+    }
+    override fun surfaceChanged(holder: SurfaceHolder, format: Int, w: Int, h: Int) {}
+    override fun surfaceDestroyed(holder: SurfaceHolder) {
+        try { codec?.stop() } catch (_: Exception) { }
+        try { codec?.release() } catch (_: Exception) { }
+        codec = null
+    }
 
     fun configure(w: Int, h: Int) {
         if (w <= 0 || h <= 0) return
         if (w == width && h == height && codec != null) return
+        pendingConfig = w to h
         try { codec?.stop() } catch (_: Exception) { }
         try { codec?.release() } catch (_: Exception) { }
         codec = null
         width = w; height = h
-        val surface = holder.surface ?: run { pendingFrame = null; return }
+        holder.setFixedSize(w, h)
+        val surface = holder.surface ?: return
         try {
             val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h)
             format.setInteger(MediaFormat.KEY_LOW_LATENCY, 1)

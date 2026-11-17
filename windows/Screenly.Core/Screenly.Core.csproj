@@ -6,6 +6,7 @@
     <RootNamespace>Screenly.Core</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
+    <PackageReference Include="H264Sharp" Version="1.6.0" />
     <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
   </ItemGroup>
 </Project>

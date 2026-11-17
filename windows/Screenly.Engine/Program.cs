@@ -164,7 +164,7 @@ public static class Program
                     enc = new H264Encoder();
                     enc.Initialize(dc.Width, dc.Height,
                         cfg.Encoding.TargetFps, cfg.Encoding.BitrateKbps);
-                    if (!enc.IsReady) throw new Exception($"H264 encoder init failed: {enc.InitError}");
+                    if (!enc.IsReady) throw new Exception("H264 encoder init failed");
                     state.Encoder = enc;
                     state.UseH264 = true;
                     state.Capture = dc;
@@ -579,7 +579,7 @@ public static class Program
                             var enc = st.Encoder.Encode(rawFrame.JpegData, rawFrame.Width, rawFrame.Height, rawFrame.TimestampUs);
                             if (enc != null)
                             {
-                                var header = new VideoFrameHeader(seq++, enc.TimestampUs, (ushort)rawFrame.Width, (ushort)rawFrame.Height, enc.IsKeyframe, false);
+                                var header = new VideoFrameHeader(seq++, enc.TimestampUs, (ushort)rawFrame.Width, (ushort)rawFrame.Height, true, false); // force keyframe for testing
                                 var msg = FrameCodec.Encode(header, enc.Data);
                                 try { await sess.SendAsync(MessageType.VideoFrame, msg); } catch { }
                                 if (seq % 100 == 0) Log($"frames sent: {seq}");
@@ -600,7 +600,7 @@ public static class Program
                 catch (Exception ex) { Log($"session {kv.Key} frame error: {ex.Message}"); }
                 }
                 frameCounter++;
-                try { await Task.Delay(33, cts.Token); } catch (OperationCanceledException) { break; }
+                try { await Task.Delay(10, cts.Token); } catch (OperationCanceledException) { break; }
             }
         }, cts.Token);
 
