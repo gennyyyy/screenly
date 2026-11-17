@@ -135,11 +135,7 @@ fun ScreenlyApp(activity: Activity) {
                     }
                     is ServerEvent.Frame -> {
                         if (ev.w != streamW || ev.h != streamH) { streamW = ev.w; streamH = ev.h }
-                        val desiredOrientation = if (streamW > streamH) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
-                        if (desiredOrientation != lastAppliedOrientation) {
-                            activity.requestedOrientation = desiredOrientation
-                            lastAppliedOrientation = desiredOrientation
-                        }
+                        // No auto-rotate: follow the tablet's physical orientation (manual rotation).
                         if (ev.isJpeg) {
                             val bmp = android.graphics.BitmapFactory.decodeByteArray(ev.nal, 0, ev.nal.size)
                             if (bmp != null) {

@@ -297,15 +297,9 @@ public static class Program
                 return;
             }
 
-            if (dyn && clientW > 0 && clientH > 0)
-            {
-                if (capture == null) { await EnsureDisplayForClient(deviceId, clientW, clientH); return; }
-                var (cw, ch) = CapResolution(clientW, clientH, capW, capH);
-                if (capture.Width != cw || capture.Height != ch)
-                {
-                    await RecreateTo(cw, ch, deviceId);
-                }
-            }
+            // Keep the current display for all clients (no auto-recreate on device switch).
+            // New devices letterbox; resolution changes only via explicit CONFIG.
+            if (capture == null) { await EnsureDisplayForClient(deviceId, clientW, clientH); return; }
             }
             finally { displayLock.Release(); }
         }
