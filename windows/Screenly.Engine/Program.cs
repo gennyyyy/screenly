@@ -101,13 +101,13 @@ public static class Program
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "Screenly", "status.json");
 
-    public static void WriteStatusFile(string codec, int width, int height, int fps)
+    public static void WriteStatusFile(string codec, int width, int height, int fps, string connectionType = "USB", int connectedDevices = 0)
     {
         try
         {
             var dir = Path.GetDirectoryName(StatusFilePath);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            var payload = JsonSerializer.Serialize(new { codec, width, height, fps });
+            var payload = JsonSerializer.Serialize(new { codec, width, height, fps, connectionType, connectedDevices });
             var tmp = StatusFilePath + ".tmp";
             File.WriteAllText(tmp, payload);
             File.Move(tmp, StatusFilePath, overwrite: true);
@@ -307,6 +307,7 @@ public static class Program
                 st.Encoder?.Dispose();
                 try { st.Display.RemoveAsync().GetAwaiter().GetResult(); } catch { }
             }
+            try { WriteStatusFile(requestedCodec, cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height, cfg.Encoding.TargetFps, "USB", server.Sessions.Count(x => x.HasHandshaked)); } catch { }
         };
         server.MessageHandler = async (session, type, payload) =>
         {
@@ -375,8 +376,9 @@ public static class Program
                         finally { displayLock.Release(); }
                         state.Width = state.Capture?.Width ?? targetW;
                         state.Height = state.Capture?.Height ?? targetH;
-                        sessionStates[session.Id] = state;
-
+                        sessionStates[session.Id] = state; 
+ 
+                        WriteStatusFile(state.UseH264 ? "h264" : "jpeg", state.Capture?.Width ?? cfg.VirtualDisplay.Width, state.Capture?.Height ?? cfg.VirtualDisplay.Height, cfg.Encoding.TargetFps, "USB", server.Sessions.Count(s => s.HasHandshaked));
                         var activeCodecNow = state.UseH264 ? "h264" : "jpeg";
                         var cw = state.Capture?.Width ?? cfg.VirtualDisplay.Width;
                         var ch = state.Capture?.Height ?? cfg.VirtualDisplay.Height;
@@ -445,9 +447,10 @@ public static class Program
                             else { tw = cfg.VirtualDisplay.Width; th = cfg.VirtualDisplay.Height; }
                             if (st.Capture == null || st.Capture.Width != tw || st.Capture.Height != th)
                             {
-                                await RecreateSessionAsync(session, st, tw, th);
-                            }
-                        }
+                                await RecreateSessionAsync(session, st, tw, th); 
+                                try { WriteStatusFile(st.UseH264 ? "h264" : "jpeg", st.Capture?.Width ?? cfg.VirtualDisplay.Width, st.Capture?.Height ?? cfg.VirtualDisplay.Height, cfg.Encoding.TargetFps, "USB", server.Sessions.Count(s => s.HasHandshaked)); } catch { }
+                            } 
+                        } 
                         await session.SendAsync(MessageType.Config, payload);
                         break;
                     case MessageType.InputTouch:

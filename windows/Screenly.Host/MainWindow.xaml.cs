@@ -55,11 +55,14 @@ public partial class MainWindow : System.Windows.Window
                             var json = System.IO.File.ReadAllText(statusPath);
                             using var doc = System.Text.Json.JsonDocument.Parse(json);
                             var root = doc.RootElement;
-                            var codec = root.GetProperty("codec").GetString() ?? "?";
-                            var w = root.GetProperty("width").GetInt32();
-                            var h = root.GetProperty("height").GetInt32();
-                            var fps = root.GetProperty("fps").GetInt32();
-                            statusLine = "\n\nEncoder: " + codec + " " + w + "x" + h + " @ " + fps + " fps";
+                            var codec = root.TryGetProperty("codec", out var cEl) ? (cEl.GetString() ?? "?") : "?";
+                            var w = root.TryGetProperty("width", out var wEl) ? wEl.GetInt32() : 0;
+                            var h = root.TryGetProperty("height", out var hEl) ? hEl.GetInt32() : 0;
+                            var fps = root.TryGetProperty("fps", out var fEl) ? fEl.GetInt32() : 0;
+                            var connType = root.TryGetProperty("connectionType", out var ctEl) ? (ctEl.GetString() ?? "?") : "?";
+                            var devices = root.TryGetProperty("connectedDevices", out var cdEl) ? cdEl.GetInt32() : 0;
+                            statusLine = "\n\nEncoder: " + codec + " " + w + "x" + h + " @ " + fps + " fps" +
+                                "\nConnection: " + connType + "  Devices: " + devices;
                         }
                         catch { }
                         break;
