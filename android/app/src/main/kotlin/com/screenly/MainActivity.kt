@@ -2,6 +2,8 @@ package com.screenly
 
 import android.app.Activity
 import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.os.Bundle
 import android.view.SurfaceView
 import android.view.WindowManager
@@ -56,6 +58,12 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        insetsController.hide(WindowInsetsCompat.Type.systemBars())
+        insetsController.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         try { insetsController.show(WindowInsetsCompat.Type.systemBars()) } catch (_: Exception) { }
@@ -67,6 +75,7 @@ fun ScreenlyApp(activity: Activity) {
     val client = remember { ScreenlyClient() }
     var connected by remember { mutableStateOf(false) }
     var firstFrameReceived by remember { mutableStateOf(false) }
+    var lastAppliedOrientation by remember { mutableStateOf<Int?>(null) }
     var streamW by remember { mutableIntStateOf(1920) }
     var streamH by remember { mutableIntStateOf(1080) }
     var cursorX by remember { mutableIntStateOf(0) }
@@ -126,6 +135,11 @@ fun ScreenlyApp(activity: Activity) {
                     }
                     is ServerEvent.Frame -> {
                         if (ev.w != streamW || ev.h != streamH) { streamW = ev.w; streamH = ev.h }
+                        val desiredOrientation = if (streamW > streamH) ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE else ActivityInfo.SCREEN_ORIENTATION_SENSOR_PORTRAIT
+                        if (desiredOrientation != lastAppliedOrientation) {
+                            activity.requestedOrientation = desiredOrientation
+                            lastAppliedOrientation = desiredOrientation
+                        }
                         if (ev.isJpeg) {
                             val bmp = android.graphics.BitmapFactory.decodeByteArray(ev.nal, 0, ev.nal.size)
                             if (bmp != null) {

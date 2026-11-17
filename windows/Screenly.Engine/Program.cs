@@ -524,6 +524,7 @@ public static class Program
 
         // Capture + stream loop (~30 fps)
         uint seq = 0;
+        uint frameCounter = 0;
         var loop = Task.Run(async () =>
         {
             while (!cts.IsCancellationRequested)
@@ -534,6 +535,59 @@ public static class Program
                     continue;
                 }
                 var cap = capture;
+                if (cap == null)
+                {
+                    try { await Task.Delay(100, cts.Token); } catch (OperationCanceledException) { break; }
+                    continue;
+                }
+                // Throttled dimension refresh (~every 30 frames)
+                if (frameCounter % 30 == 0)
+                {
+                    bool changed = false;
+                    try { changed = cap.RefreshDimensions(); } catch { }
+                    if (changed)
+                    {
+                        Log($"dimension change: {cap.Width}x{cap.Height}");
+                        // H264 path: reinit encoder; fall back to JPEG on failure
+                        if (useH264 && encoder != null)
+                        {
+                            try
+                            {
+                                encoder.Dispose();
+                                var newEnc = new H264Encoder();
+                                newEnc.Initialize(cap.Width, cap.Height, cfg.Encoding.TargetFps, cfg.Encoding.BitrateKbps);
+                                if (!newEnc.IsReady) throw new Exception("H264 reinit failed");
+                                encoder = newEnc;
+                            }
+                            catch (Exception ex)
+                            {
+                                Log($"H264 reinit failed ({ex.Message}); falling back to JPEG.");
+                                // ponytail: full capture reinit not wired; switch to GDI JPEG capture
+                                encoder?.Dispose();
+                                encoder = null;
+                                useH264 = false;
+                                try { capture?.Stop(); } catch { }
+                                capture?.Dispose();
+                                var gc = new GdiCapture(70);
+                                gc.Start(0);
+                                capture = gc;
+                                cap = gc;
+                            }
+                        }
+                        // Notify all handshaked sessions with CONFIG
+                        var activeCodecNow = useH264 ? "h264" : "jpeg";
+                        var cw = cap?.Width ?? cfg.VirtualDisplay.Width;
+                        var ch = cap?.Height ?? cfg.VirtualDisplay.Height;
+                        var configJson = JsonSerializer.Serialize(new { width = cw, height = ch, fps = cfg.Encoding.TargetFps, bitrateKbps = cfg.Encoding.BitrateKbps, codec = activeCodecNow });
+                        var configBytes = Encoding.UTF8.GetBytes(configJson);
+                        foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
+                        {
+                            try { await s.SendAsync(MessageType.Config, configBytes); } catch { }
+                        }
+                    }
+                }
+                frameCounter++;
+                cap = capture;
                 if (cap == null)
                 {
                     try { await Task.Delay(100, cts.Token); } catch (OperationCanceledException) { break; }

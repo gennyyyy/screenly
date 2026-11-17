@@ -157,6 +157,29 @@ public sealed class DxgiCapture : ICapture
         return true;
     }
 
+    public bool RefreshDimensions()
+    {
+        if (_deviceName != null)
+        {
+            var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
+            if (EnumDisplaySettings(_deviceName, -1, ref dm))
+            {
+                int w = dm.dmPelsWidth;
+                int h = dm.dmPelsHeight;
+                if (w <= 0) w = _width;
+                if (h <= 0) h = _height;
+                if (w != _width || h != _height)
+                {
+                    _width = w;
+                    _height = h;
+                    return true;
+                }
+                return false;
+            }
+        }
+        // fallback when device null: keep defaults (no change)
+        return false;
+    }
     public void Stop() => _running = false;
     public void Dispose() => Stop();
 

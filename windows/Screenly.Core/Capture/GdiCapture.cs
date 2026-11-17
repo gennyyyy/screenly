@@ -12,6 +12,7 @@ public interface ICapture : IDisposable
     void Start(int displayId);
     bool TryGetFrame(out CapturedFrame frame);
     void Stop();
+    bool RefreshDimensions();
     int MonitorX { get; }
     int MonitorY { get; }
     int Width { get; }
@@ -179,6 +180,38 @@ public sealed class GdiCapture : ICapture
         return true;
     }
 
+    public bool RefreshDimensions()
+    {
+        if (_deviceName != null)
+        {
+            var dm = new DEVMODE();
+            dm.dmSize = (short)Marshal.SizeOf<DEVMODE>();
+            if (EnumDisplaySettings(_deviceName, -1, ref dm))
+            {
+                int w = dm.dmPelsWidth;
+                int h = dm.dmPelsHeight;
+                if (w <= 0) w = _width;
+                if (h <= 0) h = _height;
+                if (w != _width || h != _height)
+                {
+                    _width = w;
+                    _height = h;
+                    return true;
+                }
+                return false;
+            }
+        }
+        // fallback: primary screen (device null)
+        int sw = GetSystemMetrics(SM_CXSCREEN);
+        int sh = GetSystemMetrics(SM_CYSCREEN);
+        if (sw > 0 && sh > 0 && (sw != _width || sh != _height))
+        {
+            _width = sw;
+            _height = sh;
+            return true;
+        }
+        return false;
+    }
     public void Stop() => _running = false;
     public void Dispose() => Stop();
 
