@@ -99,7 +99,7 @@ public sealed class StreamServer : IAsyncDisposable
                 while (!pingCts.IsCancellationRequested)
                 {
                     await Task.Delay(5000, pingCts.Token);
-                    if ((DateTime.UtcNow - session.LastPong).TotalSeconds > 10)
+                    if ((DateTime.UtcNow - session.LastPong).TotalSeconds > 30)
                     {
                         break;
                     }
