@@ -213,12 +213,14 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
 
     public int DisplayCount => _displays.Count;
 
-    public Task<DisplayHandle> CreateAsync(int width, int height, int refreshHz, CancellationToken ct = default)
+    /// <summary>
+    /// Remove stale VDD displays left by previous (crashed) runs.
+    /// Call once at engine startup, in the background, so normal CreateAsync
+    /// only creates a single display without churn.
+    /// </summary>
+    public void CleanupStaleIndices()
     {
-        var h = OpenHandle();
-        if (h == IntPtr.Zero) throw new InvalidOperationException("Parsec VDD device not found (driver not installed?)");
-        // Clean up stale displays from previous (crashed) runs only when no displays are active.
-        if (_displays.Count == 0) try
+        try
         {
             var indices = new List<int>();
             if (File.Exists(IndicesPath))
@@ -233,10 +235,8 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
             var remaining = new List<int>(indices.Distinct());
             foreach (var oldIdx in indices.Distinct().ToList())
             {
-                if (_displays.ContainsValue(oldIdx)) continue;
                 bool removed = false;
                 var buf = new byte[32];
-                // official 16-bit big-endian index
                 buf[0] = (byte)((oldIdx >> 8) & 0xFF);
                 buf[1] = (byte)(oldIdx & 0xFF);
                 if (IoControl(VDD_IOCTL_REMOVE, buf, null, 5000, 32, false))
@@ -253,7 +253,6 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
                 Log($"VDD REMOVE (stale cleanup) index {oldIdx}: {(removed ? "success" : "FAILED")} Win32Error={Marshal.GetLastWin32Error()}");
                 if (removed) remaining.Remove(oldIdx);
             }
-            // keep failed indices for next run; delete files only when all removed
             try
             {
                 if (remaining.Count == 0)
@@ -270,6 +269,12 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
             catch { }
         }
         catch { }
+    }
+
+    public Task<DisplayHandle> CreateAsync(int width, int height, int refreshHz, CancellationToken ct = default)
+    {
+        var h = OpenHandle();
+        if (h == IntPtr.Zero) throw new InvalidOperationException("Parsec VDD device not found (driver not installed?)");
         // Ensure registry preset so driver creates display at requested resolution
         try
         {
