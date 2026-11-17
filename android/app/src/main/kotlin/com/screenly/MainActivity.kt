@@ -78,10 +78,13 @@ fun ScreenlyApp(activity: Activity) {
     var lastAppliedOrientation by remember { mutableStateOf<Int?>(null) }
     var streamW by remember { mutableIntStateOf(1920) }
     var streamH by remember { mutableIntStateOf(1080) }
+    var cursorX by remember { mutableIntStateOf(0) }
+    var cursorY by remember { mutableIntStateOf(0) }
+    var cursorVisible by remember { mutableStateOf(false) }
     var cursorBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
     var cursorHotspotX by remember { mutableIntStateOf(0) }
     var cursorHotspotY by remember { mutableIntStateOf(0) }
-    val cursorPos by client.cursorPosState.collectAsState(initial = null)
+    var hasCursorPos by remember { mutableStateOf(false) }
     val surfaceView = remember { SurfaceView(activity) }
     val decoder = remember { VideoDecoder(surfaceView.holder) }
     DisposableEffect(Unit) { onDispose { decoder.release() } }
@@ -165,7 +168,12 @@ fun ScreenlyApp(activity: Activity) {
                         streamH = ev.c.height
                         decoder.configure(ev.c.width, ev.c.height)
                     }
-                    is ServerEvent.CursorPos -> { } // handled via cursorPosState StateFlow
+                    is ServerEvent.CursorPos -> {
+                        cursorX = ev.x
+                        cursorY = ev.y
+                        cursorVisible = ev.visible
+                        hasCursorPos = true
+                    }
                     is ServerEvent.CursorShape -> {
                         cursorBitmap?.recycle()
                         cursorBitmap = android.graphics.BitmapFactory.decodeByteArray(ev.pngData, 0, ev.pngData.size)
@@ -175,7 +183,8 @@ fun ScreenlyApp(activity: Activity) {
                     is ServerEvent.Disconnected -> {
                         connected = false
                         firstFrameReceived = false
-                        client.cursorPosState.value = null
+                        cursorVisible = false
+                        hasCursorPos = false
                         cursorBitmap?.recycle()
                         cursorBitmap = null
                         client.close()
@@ -207,17 +216,16 @@ fun ScreenlyApp(activity: Activity) {
             }, modifier = Modifier.size(videoWidth, videoHeight).align(Alignment.Center))
             // Cursor overlay
             Canvas(modifier = Modifier.size(videoWidth, videoHeight).align(Alignment.Center)) {
-                val cp = cursorPos ?: return@Canvas
-                if (!cp.visible) return@Canvas
+                if (!hasCursorPos || !cursorVisible) return@Canvas
                 val scale = size.width / streamW.coerceAtLeast(1).toFloat()
                 val bmp = cursorBitmap
                 if (bmp != null) {
                     drawImage(
                         bmp.asImageBitmap(),
-                        topLeft = Offset(cp.x * scale - cursorHotspotX * scale, cp.y * scale - cursorHotspotY * scale)
+                        topLeft = Offset(cursorX * scale - cursorHotspotX * scale, cursorY * scale - cursorHotspotY * scale)
                     )
                 } else {
-                    drawCircle(Color.Yellow, radius = 8f, center = Offset(cp.x * scale, cp.y * scale))
+                    drawCircle(Color.Yellow, radius = 8f, center = Offset(cursorX * scale, cursorY * scale))
                 }
             }
             // Loading overlay: shown until first frame received
