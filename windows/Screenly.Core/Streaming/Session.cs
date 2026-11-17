@@ -99,10 +99,8 @@ public sealed class StreamServer : IAsyncDisposable
                 while (!pingCts.IsCancellationRequested)
                 {
                     await Task.Delay(5000, pingCts.Token);
-                    if ((DateTime.UtcNow - session.LastPong).TotalSeconds > 30)
-                    {
-                        break;
-                    }
+                    // Don't break on timeout — VDD creation blocks the receive loop.
+                    // The receive loop detects disconnection via IOException.
                     try { await session.SendAsync(MessageType.Ping, Array.Empty<byte>(), pingCts.Token); }
                     catch { break; }
                 }
