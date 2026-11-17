@@ -42,7 +42,31 @@ public partial class MainWindow : System.Windows.Window
                 using var c = new System.Net.Sockets.TcpClient();
                 c.Connect("127.0.0.1", 7543);
                 c.Close();
-                InfoText.Text = "Screenly engine is running (USB mode).\n\nOn your PC run once:\n  adb reverse tcp:7543 tcp:7543\n\nThen open the Screenly app on your phone - it auto-connects over USB.\n\nPort: 8080";
+                string statusLine = "";
+                var statusPath = System.IO.Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "Screenly", "status.json");
+                for (int j = 0; j < 5; j++)
+                {
+                    if (System.IO.File.Exists(statusPath))
+                    {
+                        try
+                        {
+                            var json = System.IO.File.ReadAllText(statusPath);
+                            using var doc = System.Text.Json.JsonDocument.Parse(json);
+                            var root = doc.RootElement;
+                            var codec = root.GetProperty("codec").GetString() ?? "?";
+                            var w = root.GetProperty("width").GetInt32();
+                            var h = root.GetProperty("height").GetInt32();
+                            var fps = root.GetProperty("fps").GetInt32();
+                            statusLine = "\n\nEncoder: " + codec + " " + w + "x" + h + " @ " + fps + " fps";
+                        }
+                        catch { }
+                        break;
+                    }
+                    System.Threading.Thread.Sleep(500);
+                }
+                InfoText.Text = "Screenly engine is running (USB mode).\n\nOn your PC run once:\n  adb reverse tcp:7543 tcp:7543\n\nThen open the Screenly app on your phone - it auto-connects over USB.\n\nPort: 8080" + statusLine;
                 return;
             }
             catch { System.Threading.Thread.Sleep(500); }

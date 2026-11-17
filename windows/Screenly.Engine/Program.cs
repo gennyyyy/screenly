@@ -97,6 +97,23 @@ public static class Program
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "Screenly", "engine.log");
 
+    public static string StatusFilePath { get; } = Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+        "Screenly", "status.json");
+
+    public static void WriteStatusFile(string codec, int width, int height, int fps)
+    {
+        try
+        {
+            var dir = Path.GetDirectoryName(StatusFilePath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            var payload = JsonSerializer.Serialize(new { codec, width, height, fps });
+            var tmp = StatusFilePath + ".tmp";
+            File.WriteAllText(tmp, payload);
+            File.Move(tmp, StatusFilePath, overwrite: true);
+        }
+        catch { }
+    }
     public static void Log(string message)
     {
         var line = $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {message}";
@@ -233,6 +250,10 @@ public static class Program
             if (created)
             {
                 await CreateCaptureForState(state);
+                var codec = state.UseH264 ? "h264" : "jpeg";
+                var cw = state.Capture?.Width ?? width;
+                var ch = state.Capture?.Height ?? height;
+                WriteStatusFile(codec, cw, ch, cfg.Encoding.TargetFps);
             }
             else
             {
@@ -243,7 +264,7 @@ public static class Program
                     gc.Start(0);
                     state.Capture = gc;
                     Log($"Fallback capture started: {gc.Width}x{gc.Height}");
-                }
+                    WriteStatusFile("jpeg", gc.Width, gc.Height, cfg.Encoding.TargetFps);                }
                 catch (Exception ex)
                 {
                     Log($"Fallback capture failed: {ex.Message}");
