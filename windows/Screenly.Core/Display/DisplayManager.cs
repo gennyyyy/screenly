@@ -43,6 +43,8 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern bool CloseHandle(IntPtr hObject);
+    [DllImport("user32.dll")]
+    private static extern int SetDisplayConfig(uint numPathArrayElements, IntPtr pathArray, uint numModeArrayElements, IntPtr modeArray, uint flags);
 
     private const uint DIGCF_PRESENT = 0x00000002;
     private const uint DIGCF_DEVICEINTERFACE = 0x00000010;
@@ -315,20 +317,31 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
     public async Task RemoveAsync(DisplayHandle handle, CancellationToken ct = default)
     {
         if (!_displays.TryGetValue(handle.Id, out var index)) return;
+        // Deactivate the display from the desktop topology before removal
+        try { SetDisplayConfig(0, IntPtr.Zero, 0, IntPtr.Zero, 0x00000001 | 0x00000080); } catch { } // SDC_TOPOLOGY_INTERNAL | SDC_APPLY
+        await Task.Delay(500);
         // Stop ping thread before removal (UPDATE ioctls interfere)
         StopPing();
         await Task.Delay(200);
-        var inBuf = new byte[32];
-        // official 16-bit big-endian index
-        inBuf[0] = (byte)((index >> 8) & 0xFF);
-        inBuf[1] = (byte)(index & 0xFF);
+        // Try multiple buffer formats: 32-byte, 2-byte, 4-byte
         bool removed = false;
-        for (int attempt = 0; attempt < 3 && !removed; attempt++)
+        var formats = new (byte[] buf, int size)[]
         {
-            if (attempt > 0) { await Task.Delay(500); StopPing(); }
-            removed = IoControl(VDD_IOCTL_REMOVE, inBuf, null, 5000, 32, synchronous: true);
-            var werr2 = Marshal.GetLastWin32Error();
-            Log($"VDD REMOVE index {index} attempt {attempt + 1}: {(removed ? "success" : "FAILED")} Win32Error={werr2}");
+            (new byte[] { (byte)((index >> 8) & 0xFF), (byte)(index & 0xFF), 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, 32),
+            (new byte[] { (byte)((index >> 8) & 0xFF), (byte)(index & 0xFF) }, 2),
+            (new byte[] { (byte)(index & 0xFF), (byte)((index >> 8) & 0xFF) }, 2), // little-endian
+        };
+        foreach (var (buf, size) in formats)
+        {
+            if (removed) break;
+            for (int attempt = 0; attempt < 2 && !removed; attempt++)
+            {
+                if (attempt > 0) await Task.Delay(300);
+                StopPing();
+                removed = IoControl(VDD_IOCTL_REMOVE, buf, null, 5000, size, synchronous: true);
+                var werr2 = Marshal.GetLastWin32Error();
+                Log($"VDD REMOVE index {index} fmt={size}be attempt {attempt + 1}: {(removed ? "success" : "FAILED")} Win32Error={werr2}");
+            }
         }
         var werr = Marshal.GetLastWin32Error();
         if (removed)

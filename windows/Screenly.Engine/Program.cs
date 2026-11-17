@@ -159,6 +159,8 @@ public static class Program
 
         var displayLock = new SemaphoreSlim(1, 1);
         var sessionStates = new ConcurrentDictionary<Guid, SessionState>();
+        // Pool of reusable VDD handles (avoids removal failures)
+        var availableDisplays = new ConcurrentBag<(DisplayManager dm, DisplayHandle handle, int w, int h)>();
         string requestedCodec = (cfg.Encoding.Codec ?? "jpeg").ToLowerInvariant();
         byte[]? currentShapePayload = null;
 
