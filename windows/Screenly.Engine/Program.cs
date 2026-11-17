@@ -164,7 +164,7 @@ public static class Program
                     enc = new H264Encoder();
                     enc.Initialize(dc.Width, dc.Height,
                         cfg.Encoding.TargetFps, cfg.Encoding.BitrateKbps);
-                    if (!enc.IsReady) throw new Exception("H264 encoder init failed");
+                    if (!enc.IsReady) throw new Exception($"H264 encoder init failed: {enc.InitError}");
                     state.Encoder = enc;
                     state.UseH264 = true;
                     state.Capture = dc;
