@@ -35,9 +35,6 @@ class ScreenlyClient {
         try {
             val s = Socket()
             s.tcpNoDelay = true
-            s.keepAlive = true
-            s.sendBufferSize = 256 * 1024
-            s.receiveBufferSize = 256 * 1024
             s.connect(java.net.InetSocketAddress(host, port), 15000)
             socket = s
             input = DataInputStream(s.getInputStream())
@@ -54,7 +51,6 @@ class ScreenlyClient {
     private suspend fun receiveLoop(connSocket: Socket) {
         try {
             val inp = input ?: return
-            android.util.Log.e("ScreenlyClient", "receiveLoop started")
             while (true) {
                 val lenBuf = ByteArray(4)
                 inp.readFully(lenBuf)
@@ -87,7 +83,6 @@ class ScreenlyClient {
                 _events.tryEmit(ServerEvent.HelloAcked(ack))
             }
             Protocol.VIDEO_FRAME -> {
-                android.util.Log.e("ScreenlyClient", "VIDEO_FRAME received, size=${payload.size}")
                 val bb = ByteBuffer.wrap(payload).order(ByteOrder.LITTLE_ENDIAN)
                 val seq = bb.int
                 val ts = bb.long

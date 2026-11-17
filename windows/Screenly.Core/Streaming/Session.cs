@@ -17,15 +17,7 @@ public sealed class Session : IAsyncDisposable
         Client = client;
         try
         {
-            client.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
-            // Set keepalive interval to 5s to detect dead connections faster
-            // and prevent intermediate NAT/firewall from dropping idle connections.
-            client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 5);
-            client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, 1);
-            client.Client.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, 3);
-            // Increase buffer sizes to prevent drops under load
-            client.Client.SendBufferSize = 256 * 1024;
-            client.Client.ReceiveBufferSize = 256 * 1024;
+            // No socket options — keep defaults
         }
         catch { }
         Stream = client.GetStream();
@@ -112,8 +104,6 @@ public sealed class StreamServer : IAsyncDisposable
                 while (!pingCts.IsCancellationRequested)
                 {
                     await Task.Delay(5000, pingCts.Token);
-                    // Don't break on timeout — VDD creation blocks the receive loop.
-                    // The receive loop detects disconnection via IOException.
                     try { await session.SendAsync(MessageType.Ping, Array.Empty<byte>(), pingCts.Token); }
                     catch { break; }
                 }

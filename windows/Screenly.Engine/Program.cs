@@ -215,7 +215,6 @@ public static class Program
             bool created = false;
             try
             {
-                if (sessionStates.Count > 1) await Task.Delay(3000);
                 var handle = await dm.CreateAsync(width, height, cfg.VirtualDisplay.RefreshHz);
                 Log($"CreateAsync result: success, handle {handle.Id} ({width}x{height})");
                 created = true;
@@ -563,7 +562,6 @@ public static class Program
         var lastStatusTime = DateTime.UtcNow;
         var loop = Task.Run(async () =>
         {
-            Log("frame loop started");
             while (!cts.IsCancellationRequested)
             {
                 var snapshot = sessionStates.ToArray();
