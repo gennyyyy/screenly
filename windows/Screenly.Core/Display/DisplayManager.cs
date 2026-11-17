@@ -323,7 +323,8 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
         }
         else
         {
-            // Leave orphaned index persisted for cleanup on next startup; keep handle for retry
+            // Removal failed: drop from active set so stale cleanup can handle the orphan later.
+            _displays.Remove(handle.Id);
             Log($"VDD RemoveAsync FAILED for index {index} (Win32Error={werr}); orphaned index persisted");
             throw new System.ComponentModel.Win32Exception(werr);
         }
