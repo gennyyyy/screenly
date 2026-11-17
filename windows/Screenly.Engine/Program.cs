@@ -611,29 +611,30 @@ public static class Program
                     var ci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
                     if (GetCursorInfo(ref ci))
                     {
-                        var firstState = sessionStates.Values.FirstOrDefault();
-                        var cap = firstState?.Capture;
-                        int mx = cap?.MonitorX ?? 0;
-                        int my = cap?.MonitorY ?? 0;
-                        int w = cap?.Width ?? 0;
-                        int h = cap?.Height ?? 0;
-                        int rx = ci.ptScreenPos.x - mx;
-                        int ry = ci.ptScreenPos.y - my;
-                        bool inBounds = (w <= 0 || h <= 0) || (rx >= 0 && rx <= w && ry >= 0 && ry <= h);
-                        int x = rx; int y = ry;
-                        if (x < 0) x = 0;
-                        if (y < 0) y = 0;
-                        if (w > 0 && x > w) x = w;
-                        if (h > 0 && y > h) y = h;
-                        bool visible = (ci.flags & CURSOR_SHOWING) != 0 && inBounds;
-                        var payload = new byte[17];
-                        BitConverter.TryWriteBytes(payload.AsSpan(0, 4), x);
-                        BitConverter.TryWriteBytes(payload.AsSpan(4, 4), y);
-                        payload[8] = (byte)(visible ? 1 : 0);
-                        BitConverter.TryWriteBytes(payload.AsSpan(9, 8), (ulong)DateTime.UtcNow.Ticks);
-                        foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
+                        foreach (var kv in sessionStates.ToArray())
                         {
-                            try { await s.SendAsync(MessageType.CursorPos, payload, cts.Token); } catch { }
+                            var sess = server.Sessions.FirstOrDefault(s => s.Id == kv.Key);
+                            if (sess == null || !sess.HasHandshaked) continue;
+                            var cap = kv.Value.Capture;
+                            int mx = cap?.MonitorX ?? 0;
+                            int my = cap?.MonitorY ?? 0;
+                            int w = cap?.Width ?? 0;
+                            int h = cap?.Height ?? 0;
+                            int rx = ci.ptScreenPos.x - mx;
+                            int ry = ci.ptScreenPos.y - my;
+                            bool inBounds = (w <= 0 || h <= 0) || (rx >= 0 && rx <= w && ry >= 0 && ry <= h);
+                            int x = rx; int y = ry;
+                            if (x < 0) x = 0;
+                            if (y < 0) y = 0;
+                            if (w > 0 && x > w) x = w;
+                            if (h > 0 && y > h) y = h;
+                            bool visible = (ci.flags & CURSOR_SHOWING) != 0 && inBounds;
+                            var payload = new byte[17];
+                            BitConverter.TryWriteBytes(payload.AsSpan(0, 4), x);
+                            BitConverter.TryWriteBytes(payload.AsSpan(4, 4), y);
+                            payload[8] = (byte)(visible ? 1 : 0);
+                            BitConverter.TryWriteBytes(payload.AsSpan(9, 8), (ulong)DateTime.UtcNow.Ticks);
+                            try { await sess.SendAsync(MessageType.CursorPos, payload, cts.Token); } catch { }
                         }
                         if (ci.hCursor != lastCursorHandle)
                         {
