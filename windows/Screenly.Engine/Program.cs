@@ -523,6 +523,8 @@ public static class Program
                     var st = kv.Value;
                     var cap = st.Capture;
                     if (cap == null) continue;
+                    try
+                    {
 
                     // Throttled dimension refresh (~every 30 frames)
                     if (frameCounter % 30 == 0)
@@ -571,7 +573,7 @@ public static class Program
 
                     if (st.UseH264 && st.Encoder != null)
                     {
-                        if (cap.TryGetFrame(out var rawFrame))
+                        if (cap != null && cap.TryGetFrame(out var rawFrame))
                         {
                             if (seq % (uint)(cfg.Encoding.TargetFps * Math.Max(1, cfg.Encoding.KeyframeIntervalSec)) == 0) st.Encoder.RequestKeyframe();
                             var enc = st.Encoder.Encode(rawFrame.JpegData, rawFrame.Width, rawFrame.Height, rawFrame.TimestampUs);
@@ -586,7 +588,7 @@ public static class Program
                     }
                     else
                     {
-                        if (cap.TryGetFrame(out var frame))
+                        if (cap != null && cap.TryGetFrame(out var frame))
                         {
                             var header = new VideoFrameHeader(seq++, frame.TimestampUs, (ushort)frame.Width, (ushort)frame.Height, true, true);
                             var msg = FrameCodec.Encode(header, frame.JpegData);
@@ -594,6 +596,8 @@ public static class Program
                             if (seq % 100 == 0) Log($"frames sent: {seq}");
                         }
                     }
+                }
+                catch (Exception ex) { Log($"session {kv.Key} frame error: {ex.Message}"); }
                 }
                 frameCounter++;
                 try { await Task.Delay(33, cts.Token); } catch (OperationCanceledException) { break; }
