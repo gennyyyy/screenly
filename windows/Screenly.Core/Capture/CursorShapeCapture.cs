@@ -64,6 +64,32 @@ public static class CursorShapeCapture
             g.ReleaseHdc(hdc);
         }
 
+        // Replace the drop shadow with a 1px black outline around the cursor.
+        // Shadow pixels are dropped; outline is drawn in the freed transparent
+        // cells adjacent to opaque cursor pixels (size preserved as much as possible).
+        var result = new Bitmap(width, height, PixelFormat.Format32bppArgb);
+        // copy non-shadow (cursor) pixels
+        for (int py = 0; py < height; py++)
+            for (int px = 0; px < width; px++)
+            {
+                var c = bmp.GetPixel(px, py);
+                if (c.A == 0) continue;
+                // Drop shadow: semi-transparent OR medium-gray (solid gray shadow).
+                int mx = Math.Max(c.R, Math.Max(c.G, c.B));
+                int mn = Math.Min(c.R, Math.Min(c.G, c.B));
+                bool gray = (mx - mn) < 30;
+                int brightness = c.R + c.G + c.B;
+                bool mediumGrayShadow = gray && brightness > 100 && brightness < 600;
+                if (c.A < 200 || mediumGrayShadow) continue;
+                result.SetPixel(px, py, c);
+            }
+        using (var g = Graphics.FromImage(bmp))
+        {
+            g.Clear(Color.Transparent);
+            g.DrawImage(result, 0, 0);
+        }
+        result.Dispose();
+
         // Encode as PNG
         using var ms = new MemoryStream();
         var pngCodec = ImageCodecInfo.GetImageEncoders().FirstOrDefault(c => c.MimeType == "image/png");

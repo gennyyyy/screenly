@@ -131,6 +131,7 @@ public static class Program
         bool recreating = false;
         var displayLock = new SemaphoreSlim(1, 1);
         ICapture? capture = null;
+        byte[]? currentShapePayload = null;
         H264Encoder? encoder = null;
         bool useH264 = (cfg.Encoding.Codec ?? "jpeg").Equals("h264", StringComparison.OrdinalIgnoreCase);
         string? lastDeviceId = null;
@@ -388,6 +389,39 @@ public static class Program
                     var ackJson = JsonSerializer.Serialize(ack);
                     await session.SendAsync(MessageType.HelloAck, Encoding.UTF8.GetBytes(ackJson));
                     Log("HELLO_ACK sent");
+                    if (currentShapePayload != null)
+                    {
+                        try { await session.SendAsync(MessageType.CursorShape, currentShapePayload); } catch { }
+                    }
+                    try
+                    {
+                        var ci2 = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
+                        byte[] pp;
+                        if (GetCursorInfo(ref ci2))
+                        {
+                            var cap2 = capture;
+                            int mx2 = cap2?.MonitorX ?? 0;
+                            int my2 = cap2?.MonitorY ?? 0;
+                            int w2 = cap2?.Width ?? 0;
+                            int h2 = cap2?.Height ?? 0;
+                            int rx2 = ci2.ptScreenPos.x - mx2;
+                            int ry2 = ci2.ptScreenPos.y - my2;
+                            int x2 = rx2 < 0 ? 0 : (w2 > 0 && rx2 > w2 ? w2 : rx2);
+                            int y2 = ry2 < 0 ? 0 : (h2 > 0 && ry2 > h2 ? h2 : ry2);
+                            bool vis2 = (ci2.flags & CURSOR_SHOWING) != 0 && (w2 <= 0 || h2 <= 0 || (rx2 >= 0 && rx2 <= w2 && ry2 >= 0 && ry2 <= h2));
+                            pp = new byte[17];
+                            BitConverter.TryWriteBytes(pp.AsSpan(0, 4), x2);
+                            BitConverter.TryWriteBytes(pp.AsSpan(4, 4), y2);
+                            pp[8] = (byte)(vis2 ? 1 : 0);
+                            BitConverter.TryWriteBytes(pp.AsSpan(9, 8), (ulong)DateTime.UtcNow.Ticks);
+                        }
+                        else
+                        {
+                            pp = new byte[17];
+                        }
+                        await session.SendAsync(MessageType.CursorPos, pp);
+                    }
+                    catch { }
                     break;
                 case MessageType.Ping:
                     await session.SendAsync(MessageType.Pong, Array.Empty<byte>());
@@ -433,14 +467,18 @@ public static class Program
         Log($"listening on port {cfg.Port}");
         var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
-        // Auto-set up USB reverse tunnel if adb is available (bounded, truthful, retry)
+        // Auto-set up USB reverse tunnel for the entire engine lifetime (never give up)
         _ = Task.Run(async () =>
         {
-            var adb = FindAdb();
-            if (adb == null) { Log("ADB not found; skipping USB tunnel setup"); return; }
-            int attempt = 0;
-            while (!cts.IsCancellationRequested && attempt < 10)
+            while (!cts.IsCancellationRequested)
             {
+                var adb = FindAdb();
+                if (adb == null)
+                {
+                    Log("ADB not found; retrying in 5s");
+                    try { await Task.Delay(5000, cts.Token); } catch (OperationCanceledException) { break; }
+                    continue;
+                }
                 try
                 {
                     var psi = new System.Diagnostics.ProcessStartInfo(adb, $"reverse tcp:7543 tcp:{cfg.Port}")
@@ -449,39 +487,37 @@ public static class Program
                         RedirectStandardOutput = true, RedirectStandardError = true,
                     };
                     using var proc = System.Diagnostics.Process.Start(psi);
-                    if (proc == null) { attempt++; await Task.Delay(2000, cts.Token); continue; }
-                    var stdoutTask = proc.StandardOutput.ReadToEndAsync();
-                    var stderrTask = proc.StandardError.ReadToEndAsync();
-                    bool exited = proc.WaitForExit(5000);
+                    if (proc == null)
+                    {
+                        Log("ADB reverse failed to start");
+                        try { await Task.Delay(3000, cts.Token); } catch (OperationCanceledException) { break; }
+                        continue;
+                    }
+                    bool exited = proc.WaitForExit(15000);
                     if (!exited)
                     {
                         try { proc.Kill(); } catch { }
                         Log("ADB reverse timed out");
-                        attempt++;
-                        await Task.Delay(2000, cts.Token);
+                        try { await Task.Delay(3000, cts.Token); } catch (OperationCanceledException) { break; }
                         continue;
                     }
-                    await Task.WhenAll(stdoutTask, stderrTask);
-                    var stdout = stdoutTask.Result;
-                    var stderr = stderrTask.Result;
+                    var stdout = proc.StandardOutput.ReadToEnd();
+                    var stderr = proc.StandardError.ReadToEnd();
                     if (proc.ExitCode != 0)
                     {
                         Log($"ADB reverse failed (exit {proc.ExitCode}): {stderr.Trim()}");
-                        attempt++;
-                        await Task.Delay(2000, cts.Token);
+                        try { await Task.Delay(3000, cts.Token); } catch (OperationCanceledException) { break; }
                         continue;
                     }
                     Log($"ADB reverse configured: device:7543 -> host:{cfg.Port}");
-                    // Success - check periodically
+                    // Success - re-verify periodically
                     await Task.Delay(10000, cts.Token);
-                    attempt = 0; // reset on success
                 }
                 catch (OperationCanceledException) { break; }
                 catch (Exception ex)
                 {
                     Log($"ADB error: {ex.Message}");
-                    attempt++;
-                    try { await Task.Delay(2000, cts.Token); } catch { break; }
+                    try { await Task.Delay(3000, cts.Token); } catch (OperationCanceledException) { break; }
                 }
             }
         }, cts.Token);
@@ -540,7 +576,72 @@ public static class Program
             }
         }, cts.Token);
 
+        // Cursor sender loop (~60 Hz): streams CursorPos and broadcasts CursorShape on handle change.
+        IntPtr lastCursorHandle = IntPtr.Zero;
+        var cursorLoop = Task.Run(async () =>
+        {
+            while (!cts.IsCancellationRequested)
+            {
+                try
+                {
+                    var ci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
+                    if (GetCursorInfo(ref ci))
+                    {
+                        var cap = capture;
+                        int mx = cap?.MonitorX ?? 0;
+                        int my = cap?.MonitorY ?? 0;
+                        int w = cap?.Width ?? 0;
+                        int h = cap?.Height ?? 0;
+                        int rx = ci.ptScreenPos.x - mx;
+                        int ry = ci.ptScreenPos.y - my;
+                        bool inBounds = (w <= 0 || h <= 0) || (rx >= 0 && rx <= w && ry >= 0 && ry <= h);
+                        int x = rx; int y = ry;
+                        if (x < 0) x = 0;
+                        if (y < 0) y = 0;
+                        if (w > 0 && x > w) x = w;
+                        if (h > 0 && y > h) y = h;
+                        bool visible = (ci.flags & CURSOR_SHOWING) != 0 && inBounds;
+                        var payload = new byte[17];
+                        BitConverter.TryWriteBytes(payload.AsSpan(0, 4), x);
+                        BitConverter.TryWriteBytes(payload.AsSpan(4, 4), y);
+                        payload[8] = (byte)(visible ? 1 : 0);
+                        BitConverter.TryWriteBytes(payload.AsSpan(9, 8), (ulong)DateTime.UtcNow.Ticks);
+                        foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
+                        {
+                            try { await s.SendAsync(MessageType.CursorPos, payload, cts.Token); } catch { }
+                        }
+
+                        // handle change -> capture shape
+                        if (ci.hCursor != lastCursorHandle)
+                        {
+                            lastCursorHandle = ci.hCursor;
+                            var shape = CursorShapeCapture.Capture();
+                            if (shape.HasValue)
+                            {
+                                var (sw, sh, hx, hy, png) = shape.Value;
+                                Log($"CursorShape captured {sw}x{sh} (shadow attenuated)");
+                                var sp = new byte[16 + png.Length];
+                                BitConverter.TryWriteBytes(sp.AsSpan(0, 4), sw);
+                                BitConverter.TryWriteBytes(sp.AsSpan(4, 4), sh);
+                                BitConverter.TryWriteBytes(sp.AsSpan(8, 4), hx);
+                                BitConverter.TryWriteBytes(sp.AsSpan(12, 4), hy);
+                                Buffer.BlockCopy(png, 0, sp, 16, png.Length);
+                                currentShapePayload = sp;
+                                foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
+                                {
+                                    try { await s.SendAsync(MessageType.CursorShape, sp, cts.Token); } catch { }
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { }
+                try { await Task.Delay(16, cts.Token); } catch (OperationCanceledException) { break; }
+            }
+        }, cts.Token);
+
         try { await loop; } catch (OperationCanceledException) { }
+        try { await cursorLoop; } catch (OperationCanceledException) { }
 
         capture?.Stop();
         capture?.Dispose();
@@ -551,17 +652,31 @@ public static class Program
 
     static string? FindAdb()
     {
-        // Check PATH
+        // Prefer PATH via where
         try
         {
             var psi = new System.Diagnostics.ProcessStartInfo("where", "adb") { RedirectStandardOutput = true, UseShellExecute = false, CreateNoWindow = true };
             using var p = System.Diagnostics.Process.Start(psi);
-            if (p != null) { p.WaitForExit(3000); var line = p.StandardOutput.ReadLine(); if (!string.IsNullOrWhiteSpace(line) && System.IO.File.Exists(line.Trim())) return line.Trim(); }
+            if (p != null)
+            {
+                p.WaitForExit(3000);
+                var line = p.StandardOutput.ReadLine();
+                if (!string.IsNullOrWhiteSpace(line) && System.IO.File.Exists(line.Trim()))
+                {
+                    var path = line.Trim();
+                    Log($"ADB found via PATH: {path}");
+                    return path;
+                }
+            }
         }
         catch { }
         // Common SDK location
         var common = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Android", "Sdk", "platform-tools", "adb.exe");
-        if (System.IO.File.Exists(common)) return common;
+        if (System.IO.File.Exists(common))
+        {
+            Log($"ADB found at common SDK path: {common}");
+            return common;
+        }
         return null;
     }
 }

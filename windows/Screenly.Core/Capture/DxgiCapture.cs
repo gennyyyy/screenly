@@ -121,9 +121,6 @@ public sealed class DxgiCapture : ICapture
             SelectObject(hdcMem, hBmp);
             BitBlt(hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
 
-            // Composite cursor into frame using shared helper
-            CursorDrawer.Draw(hdcMem, _monitorX, _monitorY, _width, _height, _monitorDpi);
-
             var data = new byte[_width * _height * 4];
             Marshal.Copy(bits, data, 0, data.Length);
 

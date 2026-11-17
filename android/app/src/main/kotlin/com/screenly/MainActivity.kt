@@ -7,6 +7,7 @@ import android.view.SurfaceView
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
@@ -14,7 +15,9 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.view.WindowCompat
@@ -66,6 +69,13 @@ fun ScreenlyApp(activity: Activity) {
     var firstFrameReceived by remember { mutableStateOf(false) }
     var streamW by remember { mutableIntStateOf(1920) }
     var streamH by remember { mutableIntStateOf(1080) }
+    var cursorX by remember { mutableIntStateOf(0) }
+    var cursorY by remember { mutableIntStateOf(0) }
+    var cursorVisible by remember { mutableStateOf(false) }
+    var cursorBitmap by remember { mutableStateOf<android.graphics.Bitmap?>(null) }
+    var cursorHotspotX by remember { mutableIntStateOf(0) }
+    var cursorHotspotY by remember { mutableIntStateOf(0) }
+    var hasCursorPos by remember { mutableStateOf(false) }
     val surfaceView = remember { SurfaceView(activity) }
     val decoder = remember { VideoDecoder(surfaceView.holder) }
     DisposableEffect(Unit) { onDispose { decoder.release() } }
@@ -148,9 +158,25 @@ fun ScreenlyApp(activity: Activity) {
                         streamH = ev.c.height
                         decoder.configure(ev.c.width, ev.c.height)
                     }
+                    is ServerEvent.CursorPos -> {
+                        cursorX = ev.x
+                        cursorY = ev.y
+                        cursorVisible = ev.visible
+                        hasCursorPos = true
+                    }
+                    is ServerEvent.CursorShape -> {
+                        cursorBitmap?.recycle()
+                        cursorBitmap = android.graphics.BitmapFactory.decodeByteArray(ev.pngData, 0, ev.pngData.size)
+                        cursorHotspotX = ev.hotspotX
+                        cursorHotspotY = ev.hotspotY
+                    }
                     is ServerEvent.Disconnected -> {
                         connected = false
                         firstFrameReceived = false
+                        cursorVisible = false
+                        hasCursorPos = false
+                        cursorBitmap?.recycle()
+                        cursorBitmap = null
                         client.close()
                         activity.stopService(Intent(activity, ConnectionService::class.java))
                     }
@@ -178,6 +204,20 @@ fun ScreenlyApp(activity: Activity) {
                 surfaceView.setOnTouchListener { _, ev -> tc.handle(ev, surfaceView.width, surfaceView.height); true }
                 surfaceView
             }, modifier = Modifier.size(videoWidth, videoHeight).align(Alignment.Center))
+            // Cursor overlay
+            Canvas(modifier = Modifier.size(videoWidth, videoHeight).align(Alignment.Center)) {
+                if (!hasCursorPos || !cursorVisible) return@Canvas
+                val scale = size.width / streamW.coerceAtLeast(1).toFloat()
+                val bmp = cursorBitmap
+                if (bmp != null) {
+                    drawImage(
+                        bmp.asImageBitmap(),
+                        topLeft = Offset(cursorX * scale - cursorHotspotX * scale, cursorY * scale - cursorHotspotY * scale)
+                    )
+                } else {
+                    drawCircle(Color.Yellow, radius = 8f, center = Offset(cursorX * scale, cursorY * scale))
+                }
+            }
             // Loading overlay: shown until first frame received
             if (!firstFrameReceived) {
                 Column(

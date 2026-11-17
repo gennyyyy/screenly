@@ -149,9 +149,6 @@ public sealed class GdiCapture : ICapture
             SelectObject(hdcMem, hBitmap);
             BitBlt(hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
 
-            // Composite cursor into frame (native Windows cursor design)
-            CursorDrawer.Draw(hdcMem, _monitorX, _monitorY, _width, _height, _monitorDpi);
-
             using var bmp = Image.FromHbitmap(hBitmap);
             using var ms = new MemoryStream();
             var jpegCodec = _jpegCodec ??= ImageCodecInfo.GetImageEncoders().First(c => c.MimeType == "image/jpeg");
