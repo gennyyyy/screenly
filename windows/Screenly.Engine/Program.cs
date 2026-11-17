@@ -565,13 +565,15 @@ public static class Program
             while (!cts.IsCancellationRequested)
             {
                 var snapshot = sessionStates.ToArray();
+                if (snapshot.Length > 0 && frameCounter % 50 == 0)
+                    Log($"frame loop: {snapshot.Length} sessions, seq={seq}");
                 foreach (var kv in snapshot)
                 {
                     var sess = server.Sessions.FirstOrDefault(s => s.Id == kv.Key);
-                    if (sess == null || !sess.HasHandshaked) continue;
+                    if (sess == null || !sess.HasHandshaked) { if (frameCounter % 50 == 0) Log($"session {kv.Key}: sess={sess?.Id}, handshaked={sess?.HasHandshaked}"); continue; }
                     var st = kv.Value;
                     var cap = st.Capture;
-                    if (cap == null) continue;
+                    if (cap == null) { if (frameCounter % 50 == 0) Log($"session {kv.Key}: capture null"); continue; }
                     try
                     {
 
