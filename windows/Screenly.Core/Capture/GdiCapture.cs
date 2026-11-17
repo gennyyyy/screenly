@@ -182,6 +182,7 @@ public sealed class GdiCapture : ICapture
 
     public bool RefreshDimensions()
     {
+        bool changed = false;
         if (_deviceName != null)
         {
             var dm = new DEVMODE();
@@ -196,10 +197,15 @@ public sealed class GdiCapture : ICapture
                 {
                     _width = w;
                     _height = h;
-                    return true;
+                    changed = true;
                 }
-                return false;
             }
+            int oldX = _monitorX, oldY = _monitorY;
+            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, MonitorCallback, IntPtr.Zero);
+            if (_monitorHandle != IntPtr.Zero)
+                _monitorDpi = CursorDrawer.GetMonitorDpi(_monitorHandle);
+            if (_monitorX != oldX || _monitorY != oldY) changed = true;
+            return changed;
         }
         // fallback: primary screen (device null)
         int sw = GetSystemMetrics(SM_CXSCREEN);

@@ -159,6 +159,7 @@ public sealed class DxgiCapture : ICapture
 
     public bool RefreshDimensions()
     {
+        bool changed = false;
         if (_deviceName != null)
         {
             var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
@@ -172,10 +173,15 @@ public sealed class DxgiCapture : ICapture
                 {
                     _width = w;
                     _height = h;
-                    return true;
+                    changed = true;
                 }
-                return false;
             }
+            int oldX = _monitorX, oldY = _monitorY;
+            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, MonitorCallback, IntPtr.Zero);
+            if (_monitorHandle != IntPtr.Zero)
+                _monitorDpi = CursorDrawer.GetMonitorDpi(_monitorHandle);
+            if (_monitorX != oldX || _monitorY != oldY) changed = true;
+            return changed;
         }
         // fallback when device null: keep defaults (no change)
         return false;
