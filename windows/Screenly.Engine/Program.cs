@@ -150,6 +150,7 @@ public sealed class SessionState
     public int Height { get; set; }
     public int LastConfigW { get; set; }
     public int LastConfigH { get; set; }
+    public int LastConfigOrientation { get; set; }
     public string? LastLoggedEncoderError { get; set; }
     public DateTime LastEncoderErrorLog { get; set; }
     // Periodic IDR schedule and REQUEST_KEYFRAME rate limit (one per 500 ms).
@@ -188,6 +189,8 @@ public static class Program
             var payload = JsonSerializer.Serialize(new
             {
                 codec, width, height, fps, connectionType, connectedDevices,
+                // 0 = 0°, 1 = 90°, 2 = 180°, 3 = 270°; 0 when no session/capture (primary fallback).
+                orientation = state?.Capture?.Orientation ?? DisplayOrientation.Default,
                 encoderError,
                 framesEncoded = encoder?.FramesEncoded ?? 0,
                 framesDropped = state?.FramesDropped ?? 0,
@@ -492,6 +495,18 @@ public static class Program
             try { await session.SendAsync(MessageType.Config, payload); } catch { }
         }
 
+        // One shape for every server CONFIG: dimensions and orientation come from the session
+        // capture, so an orientation-only change (0↔2) still reaches the client.
+        byte[] BuildConfigPayload(ICapture? cap, bool useH264) => Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new
+        {
+            width = cap?.Width ?? cfg.VirtualDisplay.Width,
+            height = cap?.Height ?? cfg.VirtualDisplay.Height,
+            fps = requestedFps,
+            bitrateKbps = cfg.Encoding.BitrateKbps,
+            codec = useH264 ? "h264" : "jpeg",
+            orientation = cap?.Orientation ?? DisplayOrientation.Default,
+        }));
+
         var server = new StreamServer(cfg.Port);
         server.ClientConnected += s => Log($"Client connected: {s.Id}");
         server.ClientDisconnected += s =>
@@ -580,10 +595,14 @@ public static class Program
                         var activeCodecNow = state.UseH264 ? "h264" : "jpeg";
                         var cw = state.Capture?.Width ?? cfg.VirtualDisplay.Width;
                         var ch = state.Capture?.Height ?? cfg.VirtualDisplay.Height;
-                        var ack = new { status = "ok", sessionId = session.Id.ToString(), pairingToken = (string?)null, config = new { width = cw, height = ch, fps = requestedFps, bitrateKbps = cfg.Encoding.BitrateKbps, codec = activeCodecNow } };
+                        var orientation = state.Capture?.Orientation ?? DisplayOrientation.Default;
+                        // The client just saw this config: start change tracking from it so the
+                        // next CONFIG is only sent for a real dimension/orientation change.
+                        state.LastConfigW = cw; state.LastConfigH = ch; state.LastConfigOrientation = orientation;
+                        var ack = new { status = "ok", sessionId = session.Id.ToString(), pairingToken = (string?)null, config = new { width = cw, height = ch, fps = requestedFps, bitrateKbps = cfg.Encoding.BitrateKbps, codec = activeCodecNow, orientation } };
                         var ackJson = JsonSerializer.Serialize(ack);
                         await session.SendAsync(MessageType.HelloAck, Encoding.UTF8.GetBytes(ackJson));
-                        Log("HELLO_ACK sent");
+                        Log($"HELLO_ACK sent: {ackJson}");
                         // Force an IDR before the first frame, then open the video gate.
                         state.Encoder?.RequestKeyframe();
                         session.ReadyToStream = true;
@@ -641,7 +660,8 @@ public static class Program
                             }
                         }
                         catch { }
-                        if (sessionStates.TryGetValue(session.Id, out var st) && rw > 0 && rh > 0 && st.Capture != null)
+                        sessionStates.TryGetValue(session.Id, out var st);
+                        if (st != null && rw > 0 && rh > 0 && st.Capture != null)
                         {
                             int tw, th;
                             if (cfg.VirtualDisplay.DynamicResolution)
@@ -654,8 +674,11 @@ public static class Program
                                 finally { displayLock.Release(); }
                                 try { WriteStatusFile(st.UseH264 ? "h264" : "jpeg", st.Capture?.Width ?? cfg.VirtualDisplay.Width, st.Capture?.Height ?? cfg.VirtualDisplay.Height, requestedFps, "USB", server.Sessions.Count(s => s.HasHandshaked), st.Encoder, encoderInitError, st, pacer.Overruns); } catch { }
                             }
-                        } 
-                        await session.SendAsync(MessageType.Config, payload);
+                        }
+                        // Reply with the applied config (capture-sourced), so CONFIG carries the
+                        // current orientation even when the client only proposed a resolution.
+                        await session.SendAsync(MessageType.Config,
+                            st is { Capture: { } cfgCapture } ? BuildConfigPayload(cfgCapture, st.UseH264) : payload);
                         break;
                     case MessageType.InputTouch:
                     case MessageType.InputKey:
@@ -871,11 +894,17 @@ public static class Program
                             }
                         }
                         bool changed = false;
+                        int prevW = cap.Width, prevH = cap.Height;
                         try { changed = cap.RefreshDimensions(); } catch { }
                         if (changed)
                         {
-                            Log($"dimension change: {cap.Width}x{cap.Height}");
-                            if (st.UseH264 && st.Encoder != null)
+                            bool dimsChanged = cap.Width != prevW || cap.Height != prevH;
+                            Log(dimsChanged
+                                ? $"dimension change: {cap.Width}x{cap.Height}"
+                                : $"orientation change: {cap.Orientation} at {cap.Width}x{cap.Height}");
+                            // Only a dimension change invalidates the encoder's SPS/PPS; an
+                            // orientation-only change (0↔2, 1↔3) keeps encoding into the same stream.
+                            if (dimsChanged && st.UseH264 && st.Encoder != null)
                             {
                                 var newEnc = TryInitH264(cap.Width, cap.Height, out var reinitError);
                                 if (newEnc != null)
@@ -894,15 +923,14 @@ public static class Program
                                     Log($"H264 reinit failed at {cap.Width}x{cap.Height}: {reinitError}; keeping H.264, will retry");
                                 }
                             }
-                            var activeCodecNow = st.UseH264 ? "h264" : "jpeg";
-                            var cw = cap?.Width ?? cfg.VirtualDisplay.Width;
-                            var ch = cap?.Height ?? cfg.VirtualDisplay.Height;
-                            if (cw != st.LastConfigW || ch != st.LastConfigH)
+                            var cw = cap.Width;
+                            var ch = cap.Height;
+                            var orientation = cap.Orientation;
+                            if (cw != st.LastConfigW || ch != st.LastConfigH || orientation != st.LastConfigOrientation)
                             {
-                                st.LastConfigW = cw; st.LastConfigH = ch;
-                                var configJson = JsonSerializer.Serialize(new { width = cw, height = ch, fps = requestedFps, bitrateKbps = cfg.Encoding.BitrateKbps, codec = activeCodecNow });
-                                var configBytes = Encoding.UTF8.GetBytes(configJson);
-                                _ = SendConfigAsync(sess, configBytes);
+                                st.LastConfigW = cw; st.LastConfigH = ch; st.LastConfigOrientation = orientation;
+                                Log($"CONFIG sent: {cw}x{ch} orientation={orientation}");
+                                _ = SendConfigAsync(sess, BuildConfigPayload(cap, st.UseH264));
                             }
                         }
                     }

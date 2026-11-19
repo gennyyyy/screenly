@@ -79,7 +79,11 @@ fun ScreenlyApp(activity: Activity) {
     val client = remember { ScreenlyClient() }
     var connected by remember { mutableStateOf(false) }
     var firstFrameReceived by remember { mutableStateOf(false) }
-    var lastAppliedOrientation by remember { mutableStateOf<Int?>(null) }
+    // Rotation of the Windows virtual display (0..3) as last reported, and the activity
+    // orientation we requested for it. While a session is up the tablet follows the PC, not its
+    // own rotation lock; configChanges keeps the activity from being recreated on the swap.
+    var lastOrientation by remember { mutableStateOf<Int?>(null) }
+    var appliedScreenOrientation by remember { mutableIntStateOf(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) }
     var streamW by remember { mutableIntStateOf(1920) }
     var streamH by remember { mutableIntStateOf(1080) }
     var cursorX by remember { mutableIntStateOf(0) }
@@ -99,6 +103,32 @@ fun ScreenlyApp(activity: Activity) {
     val videoDispatcher = remember {
         Executors.newSingleThreadExecutor { r -> Thread(r, "screenly-video") }.asCoroutineDispatcher()
     }
+    // SCREEN_ORIENTATION_* constants are hard locks: they win over the tablet's own rotation
+    // setting, which is what we want while the PC controls the display. Main thread only.
+    fun followWindowsOrientation(orientation: Int?, width: Int, height: Int) {
+        if (orientation == null) return
+        lastOrientation = orientation
+        val requested = if (width > height) {
+            if (orientation >= 2) ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
+            else ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        } else {
+            if (orientation >= 2) ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
+            else ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        }
+        if (requested != appliedScreenOrientation) {
+            appliedScreenOrientation = requested
+            activity.requestedOrientation = requested
+        }
+    }
+
+    fun releaseWindowsOrientation() {
+        lastOrientation = null
+        if (appliedScreenOrientation != ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED) {
+            appliedScreenOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+            activity.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
     DisposableEffect(Unit) {
         onDispose {
             client.close() // stop the socket + receive loop with the composition
@@ -153,13 +183,18 @@ fun ScreenlyApp(activity: Activity) {
                 when (ev) {
                     is ServerEvent.HelloAcked -> {
                         connected = true
-                        ev.ack.config?.let { streamW = it.width; streamH = it.height }
+                        ev.ack.config?.let {
+                            streamW = it.width
+                            streamH = it.height
+                            followWindowsOrientation(it.orientation, it.width, it.height)
+                        }
                         activity.startService(Intent(activity, ConnectionService::class.java))
                         statusText = "Waiting for first frame..."
                     }
                     is ServerEvent.Configured -> {
                         streamW = ev.c.width
                         streamH = ev.c.height
+                        followWindowsOrientation(ev.c.orientation, ev.c.width, ev.c.height)
                         // The H.264 codec is configured by the video worker from the frame header,
                         // so it is only ever driven from its own thread.
                     }
@@ -178,6 +213,7 @@ fun ScreenlyApp(activity: Activity) {
                     is ServerEvent.Disconnected -> {
                         connected = false
                         firstFrameReceived = false
+                        releaseWindowsOrientation()
                         cursorVisible = false
                         hasCursorPos = false
                         cursorBitmap?.recycle()
@@ -194,7 +230,11 @@ fun ScreenlyApp(activity: Activity) {
             var lastSeq: Int? = null
             client.frames.collect { ev ->
                 if (ev.w != streamW || ev.h != streamH) {
-                    withContext(Dispatchers.Main) { streamW = ev.w; streamH = ev.h }
+                    withContext(Dispatchers.Main) {
+                        streamW = ev.w
+                        streamH = ev.h
+                        followWindowsOrientation(lastOrientation, ev.w, ev.h)
+                    }
                 }
                 if (ev.isJpeg) {
                     lastSeq = null // JPEG frames do not advance the H.264 sequence

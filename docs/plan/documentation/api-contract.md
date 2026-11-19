@@ -45,9 +45,11 @@ No `VIDEO_FRAME` may be sent before `HELLO_ACK` for that session. The session is
 
 ## HELLO_ACK (S→C)
 ```json
-{ "status": "ok", "sessionId": "uuid", "pairingToken": "new-token-if-paired", "config": { "width":1920, "height":1080, "fps":30, "bitrateKbps":8000, "codec": "jpeg|h264", "keyframeIntervalSec": 2 } }
+{ "status": "ok", "sessionId": "uuid", "pairingToken": "new-token-if-paired", "config": { "width":1920, "height":1080, "fps":30, "bitrateKbps":8000, "codec": "jpeg|h264", "keyframeIntervalSec": 2, "orientation": 0 } }
 ```
 Status values: `ok`, `pin_required`, `pin_invalid`, `rejected`.
+
+`config` uses the CONFIG fields below, including `orientation`.
 
 ## VIDEO_FRAME (S→C)
 Binary payload (not JSON):
@@ -104,9 +106,20 @@ Android keycodes mapped to Windows VK codes server-side.
 
 ## CONFIG (both)
 ```json
-{ "width": 1920, "height": 1080, "fps": 60, "bitrateKbps": 8000, "keyframeIntervalSec": 2 }
+{ "width": 1920, "height": 1080, "fps": 60, "bitrateKbps": 8000, "keyframeIntervalSec": 2, "orientation": 0 }
 ```
 Server sends to propose; client may reply with adjusted prefs. Final config applied server-side (display mode + encoder). Client reconfigures decoder on dimension change.
+
+`width`/`height` are the display mode dimensions as captured (already rotated, i.e. 800x1280 for a portrait virtual display). `orientation` is the virtual-display rotation in quarter turns: `0`=0°, `1`=90°, `2`=180°, `3`=270° clockwise. It is optional and defaults to `0` when absent; a peer that does not send it is assumed to be at 0°. Android treats it as advisory display rotation for the letterboxed stream and uses it, with `width > height`, to pick the activity orientation while connected.
+
+Server-side semantics (Windows engine):
+
+- `orientation` comes from `DEVMODE.dmDisplayOrientation` of the captured virtual display. Values outside `0..3` are normalized to `0`.
+- When the capture falls back to the primary screen (no virtual display), `orientation` is always `0`.
+- `width`/`height` stay the oriented pixels-per-axis. A 90°/270° rotation swaps them; a 0↔2 (or 1↔3) rotation leaves them identical.
+- The engine sends `CONFIG` when `width`, `height` **or** `orientation` changes versus the last one sent (`LastConfigOrientation`), so an orientation-only change still notifies the client. H.264 is reinitialized only when the dimensions change; an orientation-only change keeps the existing encoder and stream.
+
+**Compatibility:** additive optional field, so `protocolVersion` stays 1. Senders may include it; receivers must tolerate absence. Adding a *required* field or changing existing field meaning requires a version bump.
 
 ## PING / PONG
 Empty payload. Windows sends PING every 5s; Android answers with PONG. The current engine records `LastPong` but does not yet enforce a missed-PONG timeout; until it does, the TCP connection itself is the liveness boundary.
@@ -143,6 +156,7 @@ Connection is stateful; reconnect creates new session. Server treats each TCP co
   "fps": 30,
   "connectionType": "USB",
   "connectedDevices": 1,
+  "orientation": 0,
   "encoderError": null,
   "framesEncoded": 1234,
   "framesDropped": 12,
@@ -162,6 +176,8 @@ Connection is stateful; reconnect creates new session. Server treats each TCP co
 ```
 
 `encoderError` is null when healthy and contains the specific exception type/message when initialization or encoding fails. `framesEncoded`, `bytesOut`, and encode-time fields reset per engine session or per encoder reinitialization.
+
+`orientation` is the captured display's rotation (`DEVMODE.dmDisplayOrientation`), `0`=0°, `1`=90°, `2`=180°, `3`=270° clockwise, read from the first active session's capture. It is `0` when no session is connected or when capture fell back to the primary screen, and it updates on the ~1 s status tick after the frame loop's throttled `RefreshDimensions` sees the rotation change (0↔2 keeps `width`/`height` unchanged).
 
 `fps` is measured from frames actually written to the client over the last second (0 when nothing is being sent); it is not derived from encoded or queued frames. `framesDropped` counts frames lost to backpressure since the session started: capture/encode skipped because a frame was still waiting for the sender, plus encoded frames replaced in the one-slot holder. The new counters split that total and add latency/pacing evidence:
 

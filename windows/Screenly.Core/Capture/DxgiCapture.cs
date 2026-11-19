@@ -61,12 +61,14 @@ public sealed class DxgiCapture : ICapture
     private int _monitorDpi = 96;
     private bool _monitorFound;
     private bool _running;
+    private int _orientation;
 
     public int MonitorX => _monitorX;
     public int MonitorY => _monitorY;
     public bool MonitorFound => _monitorFound;
     public int Width => _width;
     public int Height => _height;
+    public int Orientation => _orientation;
 
     public DxgiCapture(int quality = 70, string? deviceName = null, int encW = 1280, int encH = 720)
     {
@@ -86,6 +88,7 @@ public sealed class DxgiCapture : ICapture
                 {
                     _width = dm.dmPelsWidth;
                     _height = dm.dmPelsHeight;
+                    _orientation = DisplayOrientation.Normalize(dm.dmDisplayOrientation);
                 }
                 if (_width <= 0) _width = 1920;
                 if (_height <= 0) _height = 1080;
@@ -215,33 +218,32 @@ public sealed class DxgiCapture : ICapture
 
     public bool RefreshDimensions()
     {
-        bool changed = false;
-        if (_deviceName != null)
+        if (_deviceName == null)
         {
-            var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
-            if (EnumDisplaySettings(_deviceName, -1, ref dm))
-            {
-                int w = dm.dmPelsWidth;
-                int h = dm.dmPelsHeight;
-                if (w <= 0) w = _width;
-                if (h <= 0) h = _height;
-                if (w != _width || h != _height)
-                {
-                    _width = w;
-                    _height = h;
-                    EnsureSurface(); // recreate the GDI surface + buffer at the new size
-                    changed = true;
-                }
-            }
-            int oldX = _monitorX, oldY = _monitorY;
-            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, MonitorCallback, IntPtr.Zero);
-            if (_monitorHandle != IntPtr.Zero)
-                _monitorDpi = CursorDrawer.GetMonitorDpi(_monitorHandle);
-            if (_monitorX != oldX || _monitorY != oldY) changed = true;
-            return changed;
+            // Fallback capture (no virtual display): orientation stays 0, dimensions are fixed.
+            return false;
         }
-        // fallback when device null: keep defaults (no change)
-        return false;
+
+        int oldW = _width, oldH = _height, oldOrientation = _orientation;
+        var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
+        if (EnumDisplaySettings(_deviceName, -1, ref dm))
+        {
+            int w = dm.dmPelsWidth;
+            int h = dm.dmPelsHeight;
+            if (w <= 0) w = _width;
+            if (h <= 0) h = _height;
+            _width = w;
+            _height = h;
+            _orientation = DisplayOrientation.Normalize(dm.dmDisplayOrientation);
+        }
+        int oldX = _monitorX, oldY = _monitorY;
+        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, MonitorCallback, IntPtr.Zero);
+        if (_monitorHandle != IntPtr.Zero)
+            _monitorDpi = CursorDrawer.GetMonitorDpi(_monitorHandle);
+        // 0↔2 (and 1↔3) rotate without swapping pixels, so orientation alone must report a change.
+        // An orientation-only change keeps the surface: same buffer, same encoder, no stream break.
+        return _width != oldW || _height != oldH || _orientation != oldOrientation
+            || _monitorX != oldX || _monitorY != oldY;
     }
     public void Stop() => _running = false;
 

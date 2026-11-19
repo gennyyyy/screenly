@@ -17,6 +17,8 @@ public interface ICapture : IDisposable
     int MonitorY { get; }
     int Width { get; }
     int Height { get; }
+    // 0 = 0°, 1 = 90°, 2 = 180°, 3 = 270° clockwise (DEVMODE.dmDisplayOrientation).
+    int Orientation { get; }
 }
 
 public sealed class GdiCapture : ICapture
@@ -83,10 +85,12 @@ public sealed class GdiCapture : ICapture
     private IntPtr _monitorHandle = IntPtr.Zero;
     private int _monitorDpi = 96;
     private bool _running;
+    private int _orientation;
     public int MonitorX => _monitorX;
     public int MonitorY => _monitorY;
     public int Width => _width;
     public int Height => _height;
+    public int Orientation => _orientation;
     private readonly int _quality;
     private static ImageCodecInfo? _jpegCodec;
 
@@ -111,6 +115,7 @@ public sealed class GdiCapture : ICapture
                 {
                     _width = dm.dmPelsWidth;
                     _height = dm.dmPelsHeight;
+                    _orientation = DisplayOrientation.Normalize(dm.dmDisplayOrientation);
                 }
                 else
                 {
@@ -182,41 +187,41 @@ public sealed class GdiCapture : ICapture
 
     public bool RefreshDimensions()
     {
-        bool changed = false;
-        if (_deviceName != null)
+        if (_deviceName == null)
         {
-            var dm = new DEVMODE();
-            dm.dmSize = (short)Marshal.SizeOf<DEVMODE>();
-            if (EnumDisplaySettings(_deviceName, -1, ref dm))
+            // Fallback: primary screen capture. There is no per-monitor DEVMODE here, so the
+            // orientation stays 0 (unrotated) for the lifetime of this capture.
+            int sw = GetSystemMetrics(SM_CXSCREEN);
+            int sh = GetSystemMetrics(SM_CYSCREEN);
+            if (sw > 0 && sh > 0 && (sw != _width || sh != _height))
             {
-                int w = dm.dmPelsWidth;
-                int h = dm.dmPelsHeight;
-                if (w <= 0) w = _width;
-                if (h <= 0) h = _height;
-                if (w != _width || h != _height)
-                {
-                    _width = w;
-                    _height = h;
-                    changed = true;
-                }
+                _width = sw;
+                _height = sh;
+                return true;
             }
-            int oldX = _monitorX, oldY = _monitorY;
-            EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, MonitorCallback, IntPtr.Zero);
-            if (_monitorHandle != IntPtr.Zero)
-                _monitorDpi = CursorDrawer.GetMonitorDpi(_monitorHandle);
-            if (_monitorX != oldX || _monitorY != oldY) changed = true;
-            return changed;
+            return false;
         }
-        // fallback: primary screen (device null)
-        int sw = GetSystemMetrics(SM_CXSCREEN);
-        int sh = GetSystemMetrics(SM_CYSCREEN);
-        if (sw > 0 && sh > 0 && (sw != _width || sh != _height))
+
+        int oldW = _width, oldH = _height, oldOrientation = _orientation;
+        var dm = new DEVMODE();
+        dm.dmSize = (short)Marshal.SizeOf<DEVMODE>();
+        if (EnumDisplaySettings(_deviceName, -1, ref dm))
         {
-            _width = sw;
-            _height = sh;
-            return true;
+            int w = dm.dmPelsWidth;
+            int h = dm.dmPelsHeight;
+            if (w <= 0) w = _width;
+            if (h <= 0) h = _height;
+            _width = w;
+            _height = h;
+            _orientation = DisplayOrientation.Normalize(dm.dmDisplayOrientation);
         }
-        return false;
+        int oldX = _monitorX, oldY = _monitorY;
+        EnumDisplayMonitors(IntPtr.Zero, IntPtr.Zero, MonitorCallback, IntPtr.Zero);
+        if (_monitorHandle != IntPtr.Zero)
+            _monitorDpi = CursorDrawer.GetMonitorDpi(_monitorHandle);
+        // 0↔2 (and 1↔3) rotate without swapping pixels, so orientation alone must report a change.
+        return _width != oldW || _height != oldH || _orientation != oldOrientation
+            || _monitorX != oldX || _monitorY != oldY;
     }
     public void Stop() => _running = false;
     public void Dispose() => Stop();

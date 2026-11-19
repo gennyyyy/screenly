@@ -55,6 +55,7 @@ If it does not connect, check that `adb devices` shows the phone as `device`, an
 ## 5. Using the second screen
 
 - Once connected, the phone shows the PC's virtual display **fullscreen**.
+- The tablet orientation is locked to the Windows virtual display's **Display orientation** setting (Landscape, Portrait, or flipped). It ignores the tablet's rotation lock while connected and releases it on disconnect.
 - The PC cursor is rendered as an overlay and follows the virtual display.
 - Touch input is sent by the Android app but the engine does not inject it yet; touch does not currently move the PC cursor.
 - To stop: close the app on the phone, or stop the engine from the PC tray icon.

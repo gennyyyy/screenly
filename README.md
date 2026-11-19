@@ -8,6 +8,7 @@ Screenly turns an Android device into an extended display for a Windows PC. The 
 - JPEG is the default codec; H.264 (H264Sharp/OpenH264, software) is selectable in the Host and switches live.
 - The Host has a FRAME RATE selector: 30 FPS (stable default) or 60 FPS. 60 switches correctly but the current GDI capture path does not sustain it on the test tablet (~23–28 FPS); 30 is recommended.
 - Cursor position/shape is streamed separately and rendered as an Android overlay.
+- The Android app locks its orientation to the Windows virtual display's Display Settings orientation (0/90/180/270) and ignores the tablet's rotation lock while connected.
 - Touch events are sent by Android but the engine still ignores them (`InputInjector` is a stub).
 - H.264 800×1280 measured ~29.8 FPS over 60 s after the 1 ms timer-resolution fix; see `docs/plan/performance-baseline.md`.
 - Media Foundation hardware encoding remains blocked; see ADR-011.
