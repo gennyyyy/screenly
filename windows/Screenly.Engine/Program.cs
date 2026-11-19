@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using System.Runtime.InteropServices;
 using System.Collections.Concurrent;
+using Screenly.Core;
 using Screenly.Core.Capture;
 using Screenly.Core.Config;
 using Screenly.Core.Encoding;
@@ -66,17 +67,93 @@ public static class DisplayHelper
     public const int DISP_CHANGE_SUCCESSFUL = 0;
 }
 
+// Windows quantizes waits to the system timer (~15.6 ms by default), so Task.Delay rounds a 33 ms
+// frame period up to ~46 ms and the pacer rebases every frame (pacerOverruns). 1 ms resolution keeps
+// the paced loop honest; Windows 10 2004+ scopes the request to the calling process.
+public sealed class TimerResolution : IDisposable
+{
+    private readonly uint _periodMs;
+    private readonly bool _raised;
+
+    public TimerResolution(uint periodMs)
+    {
+        _periodMs = periodMs;
+        _raised = timeBeginPeriod(periodMs) == 0; // 0 = TIMERR_NOERROR
+    }
+
+    public bool Raised => _raised;
+
+    // Restores the previous resolution; the compiler's finally (using) covers the shutdown path.
+    public void Dispose()
+    {
+        if (_raised) { try { timeEndPeriod(_periodMs); } catch { } }
+    }
+
+    [DllImport("winmm.dll")]
+    private static extern uint timeBeginPeriod(uint uPeriod);
+    [DllImport("winmm.dll")]
+    private static extern uint timeEndPeriod(uint uPeriod);
+}
+
 public sealed class SessionState
 {
+    public SessionState(int keyframeIntervalSec) => Keyframes = new KeyframePolicy(keyframeIntervalSec);
+
     public DisplayManager Display { get; set; } = default!;
     public ICapture? Capture { get; set; }
     public H264Encoder? Encoder { get; set; }
     public bool UseH264 { get; set; }
+    // Per-session VIDEO_FRAME sequence (the frame loop is its only writer).
+    public uint Seq { get; set; }
+    // Frames actually written to the client socket: the sender is the only writer, status fps reads.
+    private long _framesSent;
+    public long FramesSent => Interlocked.Read(ref _framesSent);
+    public void MarkFrameSent() => Interlocked.Increment(ref _framesSent);
+    // Frames lost to backpressure, split by cause (frame loop only writer):
+    // skipped before capture/encode because the slot was busy, or encoded then replaced in the slot.
+    public long FramesDropped { get; set; }
+    public long BackpressureSkips { get; set; }
+    public long SlotReplacements { get; set; }
+    // Sender task's VIDEO_FRAME socket write time: sender is the only writer, status reads.
+    private double _sendMsMin = double.MaxValue, _sendMsTotal, _sendMsMax;
+    private long _sends;
+    public double SendMsMin => _sends == 0 ? 0 : _sendMsMin;
+    public double SendMsAvg => _sends == 0 ? 0 : _sendMsTotal / _sends;
+    public double SendMsMax => _sendMsMax;
+    public void RecordSend(double ms)
+    {
+        _sends++;
+        if (ms < _sendMsMin) _sendMsMin = ms;
+        if (ms > _sendMsMax) _sendMsMax = ms;
+        _sendMsTotal += ms;
+    }
+    // Frame loop's ICapture.TryGetFrame time (successful frames only): frame loop is the only
+    // writer, status reads. Isolates capture cost from encode/send when a frame misses its budget.
+    private double _captureMsMin = double.MaxValue, _captureMsTotal, _captureMsMax;
+    private long _captures;
+    public double CaptureMsMin => _captures == 0 ? 0 : _captureMsMin;
+    public double CaptureMsAvg => _captures == 0 ? 0 : _captureMsTotal / _captures;
+    public double CaptureMsMax => _captureMsMax;
+    public void RecordCapture(double ms)
+    {
+        _captures++;
+        if (ms < _captureMsMin) _captureMsMin = ms;
+        if (ms > _captureMsMax) _captureMsMax = ms;
+        _captureMsTotal += ms;
+    }
+    // One-slot latest frame for this session's sender task; the frame loop never awaits the socket.
+    public LatestFrameSlot Frames { get; } = new();
+    // Sender lifecycle: started after HELLO_ACK, cancelled on disconnect, codec-change close and shutdown.
+    public CancellationTokenSource? SenderCts { get; set; }
     public string DeviceId { get; set; } = "unknown";
     public int Width { get; set; }
     public int Height { get; set; }
     public int LastConfigW { get; set; }
     public int LastConfigH { get; set; }
+    public string? LastLoggedEncoderError { get; set; }
+    public DateTime LastEncoderErrorLog { get; set; }
+    // Periodic IDR schedule and REQUEST_KEYFRAME rate limit (one per 500 ms).
+    public KeyframePolicy Keyframes { get; }
 }
 
 public static class Program
@@ -101,13 +178,32 @@ public static class Program
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "Screenly", "status.json");
 
-    public static void WriteStatusFile(string codec, int width, int height, int fps, string connectionType = "USB", int connectedDevices = 0)
+    public static void WriteStatusFile(string codec, int width, int height, int fps, string connectionType = "USB", int connectedDevices = 0, H264Encoder? encoder = null, string? encoderError = null, SessionState? state = null, long pacerOverruns = 0)
     {
         try
         {
             var dir = Path.GetDirectoryName(StatusFilePath);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-            var payload = JsonSerializer.Serialize(new { codec, width, height, fps, connectionType, connectedDevices });
+            encoderError ??= encoder?.LastError;
+            var payload = JsonSerializer.Serialize(new
+            {
+                codec, width, height, fps, connectionType, connectedDevices,
+                encoderError,
+                framesEncoded = encoder?.FramesEncoded ?? 0,
+                framesDropped = state?.FramesDropped ?? 0,
+                backpressureSkips = state?.BackpressureSkips ?? 0,
+                slotReplacements = state?.SlotReplacements ?? 0,
+                pacerOverruns,
+                bytesOut = encoder?.BytesOut ?? 0,
+                encodeMsMin = Math.Round(encoder?.EncodeMsMin ?? 0, 1),
+                encodeMsAvg = Math.Round(encoder?.EncodeMsAvg ?? 0, 1),
+                encodeMsMax = Math.Round(encoder?.EncodeMsMax ?? 0, 1),
+                captureMsMin = Math.Round(state?.CaptureMsMin ?? 0, 1),
+                captureMsAvg = Math.Round(state?.CaptureMsAvg ?? 0, 1),
+                captureMsMax = Math.Round(state?.CaptureMsMax ?? 0, 1),
+                sendMsAvg = Math.Round(state?.SendMsAvg ?? 0, 1),
+                sendMsMax = Math.Round(state?.SendMsMax ?? 0, 1),
+            });
             var tmp = StatusFilePath + ".tmp";
             File.WriteAllText(tmp, payload);
             File.Move(tmp, StatusFilePath, overwrite: true);
@@ -164,34 +260,13 @@ public static class Program
         DisplayHandle? sharedHandle = null;
         int sharedW = 0, sharedH = 0;
         string requestedCodec = (cfg.Encoding.Codec ?? "jpeg").ToLowerInvariant();
+        // FramePacer treats <= 0 as "unset"; keep that semantic and clamp the rest to the pacer's range.
+        static int ClampFps(int fps) => Math.Clamp(fps <= 0 ? FramePacer.DefaultFps : fps, FramePacer.MinFps, FramePacer.MaxFps);
+        int requestedFps = ClampFps(cfg.Encoding.TargetFps);
+        // Last H.264 init failure, surfaced in status.json even after the JPEG fallback.
+        string? encoderInitError = null;
+        var pacer = new FramePacer(requestedFps);
 
-        // Watch config.json so the host app can switch encoder at runtime.
-        try
-        {
-            var watcher = new System.IO.FileSystemWatcher(
-                System.IO.Path.GetDirectoryName(ConfigStore.ConfigPath)!,
-                System.IO.Path.GetFileName(ConfigStore.ConfigPath))
-            {
-                NotifyFilter = System.IO.NotifyFilters.LastWrite | System.IO.NotifyFilters.Size,
-                EnableRaisingEvents = true,
-            };
-            watcher.Changed += (_, _) =>
-            {
-                try
-                {
-                    System.Threading.Thread.Sleep(200); // let the writer finish
-                    var fresh = ConfigStore.Load();
-                    var c = (fresh.Encoding.Codec ?? "jpeg").ToLowerInvariant();
-                    if (c != requestedCodec)
-                    {
-                        requestedCodec = c;
-                        Log($"config changed: encoder switched to {c}");
-                    }
-                }
-                catch { }
-            };
-        }
-        catch { }
         byte[]? currentShapePayload = null;
 
         async Task CreateCaptureForState(SessionState state)
@@ -210,18 +285,20 @@ public static class Program
                 try
                 {
                     dc.Start(0);
-                    enc = new H264Encoder();
+                    enc = new H264Encoder { DumpPath = cfg.Encoding.DumpPath };
                     enc.Initialize(dc.Width, dc.Height,
-                        cfg.Encoding.TargetFps, cfg.Encoding.BitrateKbps);
-                    if (!enc.IsReady) throw new Exception("H264 encoder init failed");
+                        requestedFps, cfg.Encoding.BitrateKbps);
+                    if (!enc.IsReady) throw new InvalidOperationException("H264 encoder init failed");
                     state.Encoder = enc;
                     state.UseH264 = true;
                     state.Capture = dc;
+                    encoderInitError = null;
                     Log($"H264 mode: DXGI capture {dc.Width}x{dc.Height}");
                 }
                 catch (Exception ex)
                 {
-                    Log($"H264 init failed ({ex.Message}); falling back to JPEG.");
+                    encoderInitError = enc?.LastError ?? ex.ToString();
+                    Log($"H264 init failed: {encoderInitError}; falling back to JPEG.");
                     dc.Dispose();
                     enc?.Dispose();
                     state.Encoder = null;
@@ -233,11 +310,29 @@ public static class Program
             }
             else
             {
+                encoderInitError = null;
                 var gc = new GdiCapture(70);
                 gc.Start(0);
                 state.Capture = gc;
                 state.UseH264 = false;
             }
+        }
+
+        // H.264 init with one retry at the requested dimensions. Returns null (and sets error) if both fail.
+        H264Encoder? TryInitH264(int width, int height, out string? error)
+        {
+            error = null;
+            for (int attempt = 1; attempt <= 2; attempt++)
+            {
+                var enc = new H264Encoder { DumpPath = cfg.Encoding.DumpPath };
+                try { enc.Initialize(width, height, requestedFps, cfg.Encoding.BitrateKbps); }
+                catch (Exception ex) { error = ex.ToString(); }
+                if (enc.IsReady) return enc;
+                error = enc.LastError ?? error ?? "unknown H264 init failure";
+                enc.Dispose();
+                Log($"H264 init attempt {attempt}/2 failed at {width}x{height}: {error}");
+            }
+            return null;
         }
 
         async Task CreateDisplayForState(SessionState state, int width, int height)
@@ -306,7 +401,7 @@ public static class Program
                 var codec = state.UseH264 ? "h264" : "jpeg";
                 var cw = state.Capture?.Width ?? width;
                 var ch = state.Capture?.Height ?? height;
-                WriteStatusFile(codec, cw, ch, cfg.Encoding.TargetFps);
+                WriteStatusFile(codec, cw, ch, requestedFps, "USB", 0, state.Encoder, encoderInitError, state, pacer.Overruns);
             }
             else
             {
@@ -317,7 +412,7 @@ public static class Program
                     gc.Start(0);
                     state.Capture = gc;
                     Log($"Fallback capture started: {gc.Width}x{gc.Height}");
-                    WriteStatusFile("jpeg", gc.Width, gc.Height, cfg.Encoding.TargetFps);                }
+                    WriteStatusFile("jpeg", gc.Width, gc.Height, requestedFps, "USB", 0, null, encoderInitError);                }
                 catch (Exception ex)
                 {
                     Log($"Fallback capture failed: {ex.Message}");
@@ -345,6 +440,58 @@ public static class Program
             }
         }
 
+        // Per-session capture timing: successful frames only, so captureMs min/avg/max reflect the
+        // real cost of pulling one frame and can be compared against the frame period.
+        static bool TryCaptureTimed(ICapture capture, SessionState st, out CapturedFrame frame)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            bool ok = capture.TryGetFrame(out frame);
+            sw.Stop();
+            if (ok) st.RecordCapture(sw.Elapsed.TotalMilliseconds);
+            return ok;
+        }
+
+        // Per-session sender: drains the one-slot latest-frame holder and is the only place that
+        // awaits VIDEO_FRAME socket writes, so a slow client never blocks the shared capture loop.
+        void StartSender(Session session, SessionState state)
+        {
+            if (state.SenderCts != null) return; // duplicate HELLO: one sender per session
+            var sendCts = new CancellationTokenSource();
+            state.SenderCts = sendCts;
+            var token = sendCts.Token;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    while (!token.IsCancellationRequested)
+                    {
+                        var frame = await state.Frames.TakeAsync(token);
+                        if (frame == null) continue;
+                        var sendSw = System.Diagnostics.Stopwatch.StartNew();
+                        await session.SendAsync(MessageType.VideoFrame, frame, token);
+                        sendSw.Stop();
+                        state.RecordSend(sendSw.Elapsed.TotalMilliseconds);
+                        state.MarkFrameSent();
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception ex) { Log($"session {session.Id} sender stopped: {ex.Message}"); }
+            }, CancellationToken.None);
+        }
+
+        void StopSender(SessionState state)
+        {
+            // Cancel only: a blocked socket write cannot be interrupted, it faults when the peer closes.
+            try { state.SenderCts?.Cancel(); } catch { }
+            state.SenderCts = null;
+        }
+
+        // Control message off the shared loop: fire-and-forget so a stalled client cannot block capture.
+        async Task SendConfigAsync(Session session, byte[] payload)
+        {
+            try { await session.SendAsync(MessageType.Config, payload); } catch { }
+        }
+
         var server = new StreamServer(cfg.Port);
         server.ClientConnected += s => Log($"Client connected: {s.Id}");
         server.ClientDisconnected += s =>
@@ -352,13 +499,15 @@ public static class Program
             Log($"Client disconnected: {s.Id}");
             if (sessionStates.TryRemove(s.Id, out var st))
             {
+                StopSender(st);
                 try { st.Capture?.Stop(); } catch { }
                 st.Capture?.Dispose();
                 st.Encoder?.Dispose();
                 // Shared VDD is kept for reuse by the next client (no churn).
             }
-            try { WriteStatusFile(requestedCodec, cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height, cfg.Encoding.TargetFps, "USB", server.Sessions.Count(x => x.HasHandshaked)); } catch { }
+            try { WriteStatusFile(requestedCodec, cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height, requestedFps, "USB", server.Sessions.Count(x => x.HasHandshaked), null, encoderInitError); } catch { }
         };
+
         server.MessageHandler = async (session, type, payload) =>
         {
             try
@@ -410,7 +559,7 @@ public static class Program
                             }
                         }
 
-                        var state = new SessionState { DeviceId = deviceId };
+                        var state = new SessionState(cfg.Encoding.KeyframeIntervalSec) { DeviceId = deviceId };
                         await displayLock.WaitAsync();
                         try
                         {
@@ -427,14 +576,18 @@ public static class Program
                         state.Height = state.Capture?.Height ?? targetH;
                         sessionStates[session.Id] = state; 
  
-                        WriteStatusFile(state.UseH264 ? "h264" : "jpeg", state.Capture?.Width ?? cfg.VirtualDisplay.Width, state.Capture?.Height ?? cfg.VirtualDisplay.Height, cfg.Encoding.TargetFps, "USB", server.Sessions.Count(s => s.HasHandshaked));
+                        WriteStatusFile(state.UseH264 ? "h264" : "jpeg", state.Capture?.Width ?? cfg.VirtualDisplay.Width, state.Capture?.Height ?? cfg.VirtualDisplay.Height, requestedFps, "USB", server.Sessions.Count(s => s.HasHandshaked), state.Encoder, encoderInitError, state, pacer.Overruns);
                         var activeCodecNow = state.UseH264 ? "h264" : "jpeg";
                         var cw = state.Capture?.Width ?? cfg.VirtualDisplay.Width;
                         var ch = state.Capture?.Height ?? cfg.VirtualDisplay.Height;
-                        var ack = new { status = "ok", sessionId = session.Id.ToString(), pairingToken = (string?)null, config = new { width = cw, height = ch, fps = cfg.Encoding.TargetFps, bitrateKbps = cfg.Encoding.BitrateKbps, codec = activeCodecNow } };
+                        var ack = new { status = "ok", sessionId = session.Id.ToString(), pairingToken = (string?)null, config = new { width = cw, height = ch, fps = requestedFps, bitrateKbps = cfg.Encoding.BitrateKbps, codec = activeCodecNow } };
                         var ackJson = JsonSerializer.Serialize(ack);
                         await session.SendAsync(MessageType.HelloAck, Encoding.UTF8.GetBytes(ackJson));
                         Log("HELLO_ACK sent");
+                        // Force an IDR before the first frame, then open the video gate.
+                        state.Encoder?.RequestKeyframe();
+                        session.ReadyToStream = true;
+                        StartSender(session, state);
                         if (currentShapePayload != null)
                         {
                             try { await session.SendAsync(MessageType.CursorShape, currentShapePayload); } catch { }
@@ -459,7 +612,7 @@ public static class Program
                                 BitConverter.TryWriteBytes(pp.AsSpan(0, 4), x2);
                                 BitConverter.TryWriteBytes(pp.AsSpan(4, 4), y2);
                                 pp[8] = (byte)(vis2 ? 1 : 0);
-                                BitConverter.TryWriteBytes(pp.AsSpan(9, 8), (ulong)DateTime.UtcNow.Ticks);
+                                BitConverter.TryWriteBytes(pp.AsSpan(9, 8), MonotonicClock.NowUs);
                             }
                             else
                             {
@@ -499,13 +652,23 @@ public static class Program
                                 await displayLock.WaitAsync();
                                 try { await RecreateSessionAsync(session, st, tw, th); }
                                 finally { displayLock.Release(); }
-                                try { WriteStatusFile(st.UseH264 ? "h264" : "jpeg", st.Capture?.Width ?? cfg.VirtualDisplay.Width, st.Capture?.Height ?? cfg.VirtualDisplay.Height, cfg.Encoding.TargetFps, "USB", server.Sessions.Count(s => s.HasHandshaked)); } catch { }
+                                try { WriteStatusFile(st.UseH264 ? "h264" : "jpeg", st.Capture?.Width ?? cfg.VirtualDisplay.Width, st.Capture?.Height ?? cfg.VirtualDisplay.Height, requestedFps, "USB", server.Sessions.Count(s => s.HasHandshaked), st.Encoder, encoderInitError, st, pacer.Overruns); } catch { }
                             }
                         } 
                         await session.SendAsync(MessageType.Config, payload);
                         break;
                     case MessageType.InputTouch:
                     case MessageType.InputKey:
+                        break;
+                    case MessageType.RequestKeyframe:
+                        if (sessionStates.TryGetValue(session.Id, out var kf) && kf.Encoder is { } kfEncoder)
+                        {
+                            if (kf.Keyframes.TryAcceptRequest(MonotonicClock.NowUs))
+                            {
+                                kfEncoder.RequestKeyframe();
+                                Log($"REQUEST_KEYFRAME from {session.Id}: forcing IDR");
+                            }
+                        }
                         break;
                     case MessageType.Disconnect:
                         Log("Client disconnect requested");
@@ -538,6 +701,60 @@ public static class Program
         }
         var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+
+        // Codec and target-fps changes are detected by polling instead of a FileSystemWatcher: the
+        // host rewrites config.json via ConfigStore.Save (tmp + File.Replace), and the replace
+        // surfaces as a directory rename that a watcher filtered to LastWrite|Size never reports.
+        // A real change is terminal (api-contract): update requestedCodec/requestedFps, DISCONNECT
+        // (reason=codec_change, or fps_change; codec wins when both changed in one poll), stop the
+        // session sender, then close so Android reconnects.
+        _ = Task.Run(async () =>
+        {
+            var lastCodec = requestedCodec;
+            var lastFps = requestedFps;
+            using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(500));
+            try
+            {
+                while (await timer.WaitForNextTickAsync(cts.Token))
+                {
+                    var codec = ConfigStore.ReadCodec();
+                    var fps = ConfigStore.ReadTargetFps();
+                    bool codecChanged = codec != null && codec != lastCodec; // missing/unreadable: ignore
+                    bool fpsChanged = fps != null && ClampFps(fps.Value) != lastFps;
+                    if (!codecChanged && !fpsChanged) continue;
+
+                    if (codecChanged)
+                    {
+                        lastCodec = codec!;
+                        requestedCodec = codec!;
+                        Log($"config changed: encoder switched to {codec}");
+                    }
+                    if (fpsChanged)
+                    {
+                        lastFps = ClampFps(fps!.Value);
+                        requestedFps = lastFps;
+                        pacer = new FramePacer(requestedFps);
+                        Log($"config changed: target fps switched to {requestedFps}");
+                    }
+                    var reason = codecChanged ? "codec_change" : "fps_change";
+                    var disconnectPayload = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { reason }));
+                    foreach (var s in server.Sessions.Where(s => s.HasHandshaked))
+                    {
+                        try
+                        {
+                            await s.SendAsync(MessageType.Disconnect, disconnectPayload);
+                            Log($"DISCONNECT ({reason}) sent to {s.Id}");
+                        }
+                        catch (Exception ex) { Log($"DISCONNECT ({reason}) failed for {s.Id}: {ex.Message}"); }
+                        // Config changed: stop this session's frame sender before the socket closes.
+                        if (sessionStates.TryGetValue(s.Id, out var oldState)) StopSender(oldState);
+                        try { s.Client.Close(); } catch { } // MonitorSessionAsync removes it and disposes state.
+                    }
+                }
+            }
+            catch (OperationCanceledException) { }
+        }, cts.Token);
+
         // Auto-set up USB reverse tunnel for the entire engine lifetime (never give up)
         _ = Task.Run(async () =>
         {
@@ -605,10 +822,12 @@ public static class Program
 
         Log("after ADB task, starting frame loop");
 
-        // Capture + stream loop (~30 fps)
-        uint seq = 0;
+        // Capture + stream loop, paced to requestedFps (stopwatch-based, no fixed sleep).
+        // 1 ms timer resolution: restored when Main returns, including the shutdown path (using → finally).
+        using var timerResolution = new TimerResolution(1);
+        Log($"timer resolution: {(timerResolution.Raised ? "1 ms" : "timeBeginPeriod failed, keeping system default")}");
         uint frameCounter = 0;
-        uint lastStatusSeq = 0;
+        long lastFramesSent = 0;
         var lastStatusTime = DateTime.UtcNow;
         var loop = Task.Run(async () =>
         {
@@ -618,16 +837,39 @@ public static class Program
                 foreach (var kv in snapshot)
                 {
                     var sess = server.Sessions.FirstOrDefault(s => s.Id == kv.Key);
-                    if (sess == null || !sess.HasHandshaked) continue;
+                    if (sess == null || !sess.ReadyToStream) continue;
                     var st = kv.Value;
                     var cap = st.Capture;
                     if (cap == null) continue;
+                    // Previous frame is still waiting for the socket: drop before capture/encode.
+                    if (st.Frames.HasPending)
+                    {
+                        st.BackpressureSkips++;
+                        st.FramesDropped++;
+                        continue;
+                    }
                     try
                     {
 
                     // Throttled dimension refresh (~every 30 frames)
                     if (frameCounter % 30 == 0)
                     {
+                        // H.264 selected but no encoder (reinit failed): retry on the frameCounter cadence.
+                        if (st.UseH264 && st.Encoder == null)
+                        {
+                            var retryEnc = TryInitH264(cap.Width, cap.Height, out var retryError);
+                            if (retryEnc != null)
+                            {
+                                st.Encoder = retryEnc;
+                                encoderInitError = null;
+                                Log($"H264 init recovered at {cap.Width}x{cap.Height}");
+                            }
+                            else
+                            {
+                                encoderInitError = retryError;
+                                Log($"H264 init retry failed at {cap.Width}x{cap.Height}: {retryError}");
+                            }
+                        }
                         bool changed = false;
                         try { changed = cap.RefreshDimensions(); } catch { }
                         if (changed)
@@ -635,26 +877,21 @@ public static class Program
                             Log($"dimension change: {cap.Width}x{cap.Height}");
                             if (st.UseH264 && st.Encoder != null)
                             {
-                                try
+                                var newEnc = TryInitH264(cap.Width, cap.Height, out var reinitError);
+                                if (newEnc != null)
                                 {
                                     st.Encoder.Dispose();
-                                    var newEnc = new H264Encoder();
-                                    newEnc.Initialize(cap.Width, cap.Height, cfg.Encoding.TargetFps, cfg.Encoding.BitrateKbps);
-                                    if (!newEnc.IsReady) throw new Exception("H264 reinit failed");
                                     st.Encoder = newEnc;
+                                    encoderInitError = null;
+                                    Log($"H264 reinit ok at {cap.Width}x{cap.Height}");
                                 }
-                                catch (Exception ex)
+                                else
                                 {
-                                    Log($"H264 reinit failed ({ex.Message}); falling back to JPEG.");
-                                    st.Encoder?.Dispose();
+                                    // Keep H.264 selected: the frame loop retries until init succeeds.
+                                    st.Encoder.Dispose();
                                     st.Encoder = null;
-                                    st.UseH264 = false;
-                                    try { st.Capture?.Stop(); } catch { }
-                                    st.Capture?.Dispose();
-                                    var gc = new GdiCapture(30);
-                                    gc.Start(0);
-                                    st.Capture = gc;
-                                    cap = gc;
+                                    encoderInitError = reinitError;
+                                    Log($"H264 reinit failed at {cap.Width}x{cap.Height}: {reinitError}; keeping H.264, will retry");
                                 }
                             }
                             var activeCodecNow = st.UseH264 ? "h264" : "jpeg";
@@ -663,62 +900,95 @@ public static class Program
                             if (cw != st.LastConfigW || ch != st.LastConfigH)
                             {
                                 st.LastConfigW = cw; st.LastConfigH = ch;
-                                var configJson = JsonSerializer.Serialize(new { width = cw, height = ch, fps = cfg.Encoding.TargetFps, bitrateKbps = cfg.Encoding.BitrateKbps, codec = activeCodecNow });
+                                var configJson = JsonSerializer.Serialize(new { width = cw, height = ch, fps = requestedFps, bitrateKbps = cfg.Encoding.BitrateKbps, codec = activeCodecNow });
                                 var configBytes = Encoding.UTF8.GetBytes(configJson);
-                                try { await sess.SendAsync(MessageType.Config, configBytes); } catch { }
+                                _ = SendConfigAsync(sess, configBytes);
                             }
                         }
                     }
 
                     if (st.UseH264 && st.Encoder != null)
                     {
-                        if (cap != null && cap.TryGetFrame(out var rawFrame))
+                        if (cap != null && TryCaptureTimed(cap, st, out var rawFrame))
                         {
-                            if (seq % (uint)(cfg.Encoding.TargetFps * Math.Max(1, cfg.Encoding.KeyframeIntervalSec)) == 0) st.Encoder.RequestKeyframe();
-                            var enc = st.Encoder.Encode(rawFrame.JpegData, rawFrame.Width, rawFrame.Height, rawFrame.TimestampUs);
+                            // Timestamp doubles as the policy's clock: one monotonic sample per frame.
+                            var nowUs = rawFrame.TimestampUs;
+                            if (st.Keyframes.ShouldRequestIdr(nowUs)) st.Encoder.RequestKeyframe();
+                            var enc = st.Encoder.Encode(rawFrame.JpegData, rawFrame.Width, rawFrame.Height, nowUs);
+                            var encError = st.Encoder.LastError
+                                ?? (st.Encoder.DumpError is { } dumpErr ? $"dump: {dumpErr}" : null);
+                            if (encError != null && (encError != st.LastLoggedEncoderError || (DateTime.UtcNow - st.LastEncoderErrorLog).TotalSeconds >= 5))
+                            {
+                                Log($"H264 encode error: {encError}");
+                                st.LastLoggedEncoderError = encError;
+                                st.LastEncoderErrorLog = DateTime.UtcNow;
+                            }
                             if (enc != null)
                             {
-                                var header = new VideoFrameHeader(seq++, enc.TimestampUs, (ushort)rawFrame.Width, (ushort)rawFrame.Height, enc.IsKeyframe, false);
-                                if (seq == 1)
+                                if (enc.IsKeyframe) st.Keyframes.MarkIdr(nowUs);
+                                var header = new VideoFrameHeader(st.Seq++, enc.TimestampUs, (ushort)rawFrame.Width, (ushort)rawFrame.Height, enc.IsKeyframe, false);
+                                if (st.Seq == 1)
                                 {
                                     var prefixLength = Math.Min(24, enc.Data.Length);
                                     Log($"H264 first output: {enc.Data.Length} bytes, keyframe={enc.IsKeyframe}, prefix={Convert.ToHexString(enc.Data.AsSpan(0, prefixLength))}");
                                 }
                                 var msg = FrameCodec.Encode(header, enc.Data);
-                                try { await sess.SendAsync(MessageType.VideoFrame, msg); } catch { }
-                                if (seq % 100 == 0) Log($"frames sent: {seq}");
+                                // A replaced frame never reached the wire: the next one must be an IDR.
+                                if (st.Frames.Publish(msg))
+                                {
+                                    st.SlotReplacements++;
+                                    st.FramesDropped++;
+                                    st.Encoder.RequestKeyframe();
+                                }
+                                if (st.Seq % 100 == 0) Log($"frames sent: {st.Seq} to {sess.Id}");
                             }
                         }
                     }
-                    else
+                    else if (!st.UseH264)
                     {
-                        if (cap != null && cap.TryGetFrame(out var frame))
+                        if (cap != null && TryCaptureTimed(cap, st, out var frame))
                         {
-                            var header = new VideoFrameHeader(seq++, frame.TimestampUs, (ushort)frame.Width, (ushort)frame.Height, true, true);
+                            var header = new VideoFrameHeader(st.Seq++, frame.TimestampUs, (ushort)frame.Width, (ushort)frame.Height, true, true);
                             var msg = FrameCodec.Encode(header, frame.JpegData);
-                            try { await sess.SendAsync(MessageType.VideoFrame, msg); } catch { }
-                            if (seq % 100 == 0) Log($"frames sent: {seq}");
+                            // Every JPEG frame is a keyframe: replacement needs no recovery.
+                            if (st.Frames.Publish(msg)) { st.SlotReplacements++; st.FramesDropped++; }
+                            if (st.Seq % 100 == 0) Log($"frames sent: {st.Seq} to {sess.Id}");
                         }
                     }
                 }
                 catch (Exception ex) { Log($"session {kv.Key} frame error: {ex.Message}"); }
                 }
                 frameCounter++;
-                // Update status file with live FPS every ~1 second
+                // Update status file with live FPS every ~1 second.
+                // fps is measured from frames the sender actually wrote, not from encoded/queued frames.
                 var now = DateTime.UtcNow;
-                if ((now - lastStatusTime).TotalSeconds >= 1.0)
+                var statusElapsed = (now - lastStatusTime).TotalSeconds;
+                if (statusElapsed >= 1.0)
                 {
-                    var delta = (int)(seq - lastStatusSeq);
-                    var fps = delta > 0 ? delta : cfg.Encoding.TargetFps;
-                    lastStatusSeq = seq;
-                    lastStatusTime = now;
                     var st0 = sessionStates.Values.FirstOrDefault();
+                    var sentNow = st0?.FramesSent ?? 0;
+                    var sentDelta = sentNow >= lastFramesSent ? sentNow - lastFramesSent : 0; // session replaced
+                    var fps = (int)Math.Round(sentDelta / statusElapsed);
+                    lastFramesSent = sentNow;
+                    lastStatusTime = now;
                     var codec = st0?.UseH264 == true ? "h264" : "jpeg";
                     var cw = st0?.Capture?.Width ?? cfg.VirtualDisplay.Width;
                     var ch = st0?.Capture?.Height ?? cfg.VirtualDisplay.Height;
-                    try { WriteStatusFile(codec, cw, ch, fps, "USB", server.Sessions.Count(s => s.HasHandshaked)); } catch { }
+                    try { WriteStatusFile(codec, cw, ch, fps, "USB", server.Sessions.Count(s => s.HasHandshaked), st0?.Encoder, encoderInitError, st0, pacer.Overruns); } catch { }
+                    // Drop attribution once per second: skipped (slot busy before capture) vs replaced
+                    // (encoded, then superseded) vs pacer overrun (frame work exceeded the period).
+                    var sendMin = st0?.SendMsMin ?? 0;
+                    var sendAvg = st0?.SendMsAvg ?? 0;
+                    var sendMax = st0?.SendMsMax ?? 0;
+                    var encMin = st0?.Encoder?.EncodeMsMin ?? 0;
+                    var encAvg = st0?.Encoder?.EncodeMsAvg ?? 0;
+                    var encMax = st0?.Encoder?.EncodeMsMax ?? 0;
+                    var capMin = st0?.CaptureMsMin ?? 0;
+                    var capAvg = st0?.CaptureMsAvg ?? 0;
+                    var capMax = st0?.CaptureMsMax ?? 0;
+                    Log($"stats: fps={fps} encoded={st0?.Encoder?.FramesEncoded ?? 0} skipped={st0?.BackpressureSkips ?? 0} replaced={st0?.SlotReplacements ?? 0} pacerOverruns={pacer.Overruns} sendMs min/avg/max={sendMin:F1}/{sendAvg:F1}/{sendMax:F1} encodeMs min/avg/max={encMin:F1}/{encAvg:F1}/{encMax:F1} captureMs min/avg/max={capMin:F1}/{capAvg:F1}/{capMax:F1}");
                 }
-                try { await Task.Delay(10, cts.Token); } catch (OperationCanceledException) { break; }
+                try { await Task.Delay(pacer.NextDelay(), cts.Token); } catch (OperationCanceledException) { break; }
             }
         }, cts.Token);
 
@@ -755,7 +1025,7 @@ public static class Program
                             BitConverter.TryWriteBytes(payload.AsSpan(0, 4), x);
                             BitConverter.TryWriteBytes(payload.AsSpan(4, 4), y);
                             payload[8] = (byte)(visible ? 1 : 0);
-                            BitConverter.TryWriteBytes(payload.AsSpan(9, 8), (ulong)DateTime.UtcNow.Ticks);
+                            BitConverter.TryWriteBytes(payload.AsSpan(9, 8), MonotonicClock.NowUs);
                             try { await sess.SendAsync(MessageType.CursorPos, payload, cts.Token); } catch { }
                         }
                         if (ci.hCursor != lastCursorHandle)
@@ -790,6 +1060,7 @@ public static class Program
 
         foreach (var kv in sessionStates.ToArray())
         {
+            StopSender(kv.Value);
             try { kv.Value.Capture?.Stop(); } catch { }
             kv.Value.Capture?.Dispose();
             kv.Value.Encoder?.Dispose();
@@ -800,6 +1071,13 @@ public static class Program
 
     static string? FindAdb()
     {
+        // Bundled Platform Tools shipped by the installer
+        var bundled = System.IO.Path.Combine(AppContext.BaseDirectory, "adb", "adb.exe");
+        if (System.IO.File.Exists(bundled))
+        {
+            Log($"ADB found bundled: {bundled}");
+            return bundled;
+        }
         // Prefer PATH via where
         try
         {

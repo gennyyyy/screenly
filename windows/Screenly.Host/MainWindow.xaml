@@ -37,6 +37,95 @@
             <Setter Property="FontSize" Value="14"/>
             <Setter Property="FontWeight" Value="Medium"/>
         </Style>
+        <!-- The stock WPF combo popup is system-white while the ComboBox sets white text,
+             so both the closed field and the drop-down are retemplated to the card theme. -->
+        <Style x:Key="CodecComboItem" TargetType="ComboBoxItem">
+            <Setter Property="Background" Value="{StaticResource BgCardAlt}"/>
+            <Setter Property="Foreground" Value="{StaticResource TextPrimary}"/>
+            <Setter Property="Padding" Value="10,6"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBoxItem">
+                        <Border x:Name="ItemBackground" Background="{TemplateBinding Background}"
+                                SnapsToDevicePixels="True">
+                            <ContentPresenter Margin="{TemplateBinding Padding}" VerticalAlignment="Center"
+                                              TextElement.Foreground="{TemplateBinding Foreground}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsHighlighted" Value="True">
+                                <Setter TargetName="ItemBackground" Property="Background" Value="{StaticResource Accent}"/>
+                                <Setter Property="Foreground" Value="{StaticResource BgCard}"/>
+                            </Trigger>
+                            <Trigger Property="IsSelected" Value="True">
+                                <Setter TargetName="ItemBackground" Property="Background" Value="{StaticResource Accent}"/>
+                                <Setter Property="Foreground" Value="{StaticResource BgCard}"/>
+                                <Setter Property="TextElement.FontWeight" Value="SemiBold"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+        <Style x:Key="CodecComboStyle" TargetType="ComboBox">
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ComboBox">
+                        <Grid>
+                            <Border x:Name="FieldBorder" CornerRadius="4"
+                                    Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    SnapsToDevicePixels="True"/>
+                            <ContentPresenter Margin="10,0,26,0" VerticalAlignment="Center"
+                                              Content="{TemplateBinding SelectionBoxItem}"
+                                              ContentTemplate="{TemplateBinding SelectionBoxItemTemplate}"
+                                              ContentStringFormat="{TemplateBinding SelectionBoxItemStringFormat}"
+                                              TextElement.Foreground="{TemplateBinding Foreground}"
+                                              IsHitTestVisible="False"/>
+                            <ToggleButton Focusable="False" ClickMode="Press"
+                                          IsChecked="{Binding IsDropDownOpen, Mode=TwoWay, RelativeSource={RelativeSource TemplatedParent}}">
+                                <ToggleButton.Template>
+                                    <ControlTemplate TargetType="ToggleButton">
+                                        <Border Background="Transparent">
+                                            <Path x:Name="Arrow" Width="8" Height="5" Stretch="Fill"
+                                                  HorizontalAlignment="Right" VerticalAlignment="Center"
+                                                  Margin="0,0,11,0" Data="M0,0 L4,4 L8,0"
+                                                  Stroke="{StaticResource TextSecondary}" StrokeThickness="1.4"/>
+                                        </Border>
+                                        <ControlTemplate.Triggers>
+                                            <Trigger Property="IsMouseOver" Value="True">
+                                                <Setter TargetName="Arrow" Property="Stroke" Value="{StaticResource Accent}"/>
+                                            </Trigger>
+                                        </ControlTemplate.Triggers>
+                                    </ControlTemplate>
+                                </ToggleButton.Template>
+                            </ToggleButton>
+                            <Popup x:Name="PART_Popup" Placement="Bottom" AllowsTransparency="True"
+                                   PopupAnimation="Slide" IsOpen="{TemplateBinding IsDropDownOpen}">
+                                <Border Margin="0,2,0,0" CornerRadius="6"
+                                        MinWidth="{TemplateBinding ActualWidth}"
+                                        MaxHeight="{TemplateBinding MaxDropDownHeight}"
+                                        Background="{StaticResource BgCardAlt}"
+                                        BorderBrush="{StaticResource Border}"
+                                        BorderThickness="1" SnapsToDevicePixels="True">
+                                    <ScrollViewer Margin="0,2">
+                                        <ItemsPresenter KeyboardNavigation.DirectionalNavigation="Contained"/>
+                                    </ScrollViewer>
+                                </Border>
+                            </Popup>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="FieldBorder" Property="BorderBrush" Value="{StaticResource AccentDim}"/>
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocusWithin" Value="True">
+                                <Setter TargetName="FieldBorder" Property="BorderBrush" Value="{StaticResource Accent}"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
         <Style x:Key="Badge" TargetType="Border">
             <Setter Property="CornerRadius" Value="6"/>
             <Setter Property="Padding" Value="8,3"/>
@@ -70,6 +159,12 @@
                             <Ellipse x:Name="StatusDot" Width="8" Height="8" Fill="{StaticResource Red}" Margin="0,6,10,0"/>
                             <TextBlock x:Name="StatusText" Text="Connecting..." Style="{StaticResource Value}"/>
                         </StackPanel>
+                        <TextBlock x:Name="EncoderErrorText" Text="" FontSize="11"
+                                   Foreground="{StaticResource Red}" TextWrapping="Wrap"
+                                   Margin="0,8,0,0" Visibility="Collapsed"/>
+                        <TextBlock x:Name="H264StatsText" Text="" FontSize="11"
+                                   Foreground="{StaticResource TextSecondary}"
+                                   Margin="0,6,0,0" Visibility="Collapsed"/>
                     </StackPanel>
                 </Border>
 
@@ -115,12 +210,32 @@
                         <TextBlock Text="ENCODER" Style="{StaticResource Label}"/>
                         <ComboBox x:Name="CodecCombo" Width="160" Height="32"
                                   HorizontalAlignment="Left" Margin="0,4,0,0"
+                                  Style="{StaticResource CodecComboStyle}"
+                                  ItemContainerStyle="{StaticResource CodecComboItem}"
                                   Background="{StaticResource BgCardAlt}"
                                   Foreground="{StaticResource TextPrimary}"
                                   BorderBrush="{StaticResource Border}"
                                   SelectionChanged="CodecCombo_SelectionChanged">
-                            <ComboBoxItem Content="JPEG" Tag="jpeg" IsSelected="True"/>
+                            <ComboBoxItem Content="JPEG" Tag="jpeg"/>
                             <ComboBoxItem Content="H.264" Tag="h264"/>
+                        </ComboBox>
+                    </StackPanel>
+                </Border>
+
+                <!-- Frame rate card -->
+                <Border Style="{StaticResource Card}">
+                    <StackPanel>
+                        <TextBlock Text="FRAME RATE" Style="{StaticResource Label}"/>
+                        <ComboBox x:Name="FpsCombo" Width="160" Height="32"
+                                  HorizontalAlignment="Left" Margin="0,4,0,0"
+                                  Style="{StaticResource CodecComboStyle}"
+                                  ItemContainerStyle="{StaticResource CodecComboItem}"
+                                  Background="{StaticResource BgCardAlt}"
+                                  Foreground="{StaticResource TextPrimary}"
+                                  BorderBrush="{StaticResource Border}"
+                                  SelectionChanged="FpsCombo_SelectionChanged">
+                            <ComboBoxItem Content="30 fps" Tag="30"/>
+                            <ComboBoxItem Content="60 fps" Tag="60"/>
                         </ComboBox>
                     </StackPanel>
                 </Border>

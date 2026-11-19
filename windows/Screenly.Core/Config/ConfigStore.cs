@@ -29,14 +29,49 @@ public static class ConfigStore
         }
     }
 
-    public static void Save(AppConfig cfg)
+    public static void Save(AppConfig cfg, string? path = null)
     {
-        var dir = Path.GetDirectoryName(ConfigPath)!;
+        var p = path ?? ConfigPath;
+        var dir = Path.GetDirectoryName(p)!;
         Directory.CreateDirectory(dir);
-        var tmp = ConfigPath + ".tmp";
+        var tmp = p + ".tmp";
         File.WriteAllText(tmp, JsonSerializer.Serialize(cfg, JsonOpts));
-        if (File.Exists(ConfigPath)) File.Replace(tmp, ConfigPath, ConfigPath + ".bak");
-        else File.Move(tmp, ConfigPath);
+        if (File.Exists(p)) File.Replace(tmp, p, p + ".bak");
+        else File.Move(tmp, p);
+    }
+
+    /// <summary>
+    /// Codec currently on disk, lowercased, or null when the file is missing/unreadable.
+    /// Unlike <see cref="Load"/> it never falls back to defaults, so a transient read error
+    /// cannot be mistaken for a real "jpeg" selection by a change poller.
+    /// </summary>
+    public static string? ReadCodec(string? path = null)
+    {
+        try
+        {
+            var p = path ?? ConfigPath;
+            if (!File.Exists(p)) return null;
+            var cfg = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(p), JsonOpts);
+            return (cfg?.Encoding?.Codec ?? "jpeg").ToLowerInvariant();
+        }
+        catch { return null; }
+    }
+
+    /// <summary>
+    /// Target fps currently on disk, or null when the file is missing/unreadable.
+    /// Like <see cref="ReadCodec"/> it never falls back to defaults, so a transient read error
+    /// cannot look like a real fps change to the change poller.
+    /// </summary>
+    public static int? ReadTargetFps(string? path = null)
+    {
+        try
+        {
+            var p = path ?? ConfigPath;
+            if (!File.Exists(p)) return null;
+            var cfg = JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(p), JsonOpts);
+            return cfg?.Encoding?.TargetFps;
+        }
+        catch { return null; }
     }
 
     public static string ResolutionsPath { get; } = Path.Combine(

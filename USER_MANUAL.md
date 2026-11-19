@@ -26,12 +26,7 @@ Screenly turns an Android device into a **second (extended) display** for a Wind
 
 > **First run:** Windows may ask you to allow the app through the firewall. Click **Allow**.
 
-The host window opens and shows:
-- **Host IP** (e.g. `192.168.0.146`)
-- **Port** (`7543`)
-- Status: engine running
-
-The engine runs in the background (system tray). You can close the host window — the engine keeps running and the second screen stays active.
+The host window opens and shows the engine status, active codec, resolution/FPS, and connection type. The engine runs in the background (system tray). You can close the host window — the engine keeps running and the second screen stays active.
 
 ---
 
@@ -50,39 +45,32 @@ The engine runs in the background (system tray). You can close the host window �
 
 ### USB connection (only mode)
 1. Plug the phone into the PC via USB with **USB debugging** enabled.
-2. Run the Screenly desktop app (`Screenly.Host.exe` or `Screenly.Engine.exe`) — it auto-configures the USB tunnel if `adb` is available.
+2. Run the Screenly desktop app (`Screenly.Host.exe` or `Screenly.Engine.exe`). The installer places `adb.exe` in `{app}\adb`; the engine uses it automatically, with PATH and the Android SDK as fallbacks.
 3. Open the Screenly app on the phone — it auto-connects to the PC.
-   - If it doesn't connect, run `adb reverse tcp:7543 tcp:7543` once on the PC, then enter `127.0.0.1` in **Host IP** and tap Connect.
 
-> **Tip:** If the Connect button is hidden by the keyboard, press **Back** first to dismiss the keyboard, then tap Connect.
+If it does not connect, check that `adb devices` shows the phone as `device`, and run `adb reverse tcp:7543 tcp:7543` once on the PC. The Android app has no manual host/IP entry.
 
 ---
 
 ## 5. Using the second screen
 
 - Once connected, the phone shows the PC's virtual display **fullscreen**.
-- **Touch** the phone screen to move the mouse cursor on the PC.
-- **Drag** to drag windows.
-- **Multi-touch** is supported for gestures.
-- The PC's cursor is visible on the extended display.
-
-To stop: close the app on the phone, or stop the engine from the PC tray icon.
+- The PC cursor is rendered as an overlay and follows the virtual display.
+- Touch input is sent by the Android app but the engine does not inject it yet; touch does not currently move the PC cursor.
+- To stop: close the app on the phone, or stop the engine from the PC tray icon.
 
 ---
 
 ## 6. Settings (Windows host)
 
-Open `Screenly.Host.exe` (tray icon → Open) to configure:
+Open `Screenly.Host.exe` (tray icon → Open) to change the **Encoder**:
 
 | Setting | Description |
 |---|---|
-| Resolution | Width × height of the virtual display (default 1920×1080) |
-| Refresh rate | Hz (default 60) |
-| Bitrate | JPEG quality (higher = sharper, more bandwidth) |
-| PIN | Optional 4–6 digit PIN to restrict connections |
-| Auto-start | Start engine automatically at Windows login |
+| Encoder | JPEG or H.264; switching disconnects the phone and reconnects with the new codec |
+| Frame rate | 30 FPS (stable) or 60 FPS; switching disconnects and reconnects. 60 FPS is not sustained by the current software/GDI path; 30 is recommended |
 
-Config is stored in `%APPDATA%\Screenly\config.json`.
+Resolution, bitrate, FPS, and virtual-display settings are read from `%APPDATA%\Screenly\config.json`. The Host does not currently expose those fields.
 
 ---
 
@@ -90,16 +78,15 @@ Config is stored in `%APPDATA%\Screenly\config.json`.
 
 | Problem | Solution |
 |---|---|
-| Phone won't connect | Ensure USB debugging is enabled and `adb reverse tcp:7543 tcp:7543` was run on the PC. |
-| "Connect" button doesn't respond | Dismiss the keyboard (Back button) first, then tap Connect. |
-| Connection refused / ENETUNREACH | Ensure phone and PC are on the same network. Check firewall (port 7543). |
-| Black screen on phone | The engine may still be starting. Wait 5 seconds and reconnect. |
-| Cursor not visible | Ensure you're running the latest engine build. |
+| Phone won't connect | Ensure USB debugging is enabled. Use `"%ProgramFiles%\Screenly\adb\adb.exe" devices` if `adb` is not on PATH; the engine recreates the reverse tunnel every 10 s. |
+| Connection refused / ENETUNREACH | Check that the engine is listening on `127.0.0.1:7543` and `adb reverse tcp:7543 tcp:7543` succeeded. |
+| Black screen on phone | The engine may still be starting, or H.264 initialization failed. Check the Host error line and `%APPDATA%\Screenly\status.json`. |
+| Cursor not visible | Ensure the cursor is inside the virtual display; the overlay is hidden when it is outside. |
 | Virtual display not created | Run `Screenly.Engine.exe` as Administrator once, or install the Parsec VDD driver manually from `C:\Program Files\Parsec Virtual Display Driver`. |
-| 12 displays shown in Settings | Ghost displays from previous runs; reboot the PC to clear them. |
-| Second screen mirrors primary | Engine now forces Extend mode; if still mirroring, set the virtual display to "Extend" in Display Settings. |
+| Ghost displays in Settings | Reboot the PC to clear stale Parsec VDD displays left by a crashed run. |
+| Second screen mirrors primary | Set the virtual display to "Extend" in Windows Display Settings. |
 | Engine won't start | Check that port 7543 isn't in use by another app. |
-| App crashes on connect | Ensure Android 8.0+ and sufficient free RAM. |
+| H.264 shows an encoder error | Check `status.json.encoderError`; the engine falls back to JPEG and reports the reason. |
 
 ---
 
@@ -112,9 +99,11 @@ Config is stored in `%APPDATA%\Screenly\config.json`.
 
 ## 9. Known limitations
 
-- **Mirror vs. extend:** Screenly creates a real extended display, but capture is via GDI+JPEG (~5–6 fps at 1080p). DXGI + H.264 hardware encoding is planned for 60 fps.
 - **USB only:** Wi-Fi/network discovery has been removed; connection is over USB via `adb reverse`.
-- **No audio:** Only video is streamed; PC audio stays on the PC.
+- **No touch input yet:** the Android app sends touch events, but the engine does not inject them.
+- **Software H.264:** H.264 uses Cisco OpenH264 on the CPU; 800×1280 measured ~29.8 FPS over 60 s. Media Foundation hardware encoding is not available.
+- **No audio:** only video is streamed; PC audio stays on the PC.
+- **No authentication/TLS:** the TCP server binds to loopback and is reached through the USB tunnel; pairing/PIN is not implemented.
 
 ---
 

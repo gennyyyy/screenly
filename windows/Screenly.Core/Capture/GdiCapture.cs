@@ -162,7 +162,7 @@ public sealed class GdiCapture : ICapture
             ReleaseDC(IntPtr.Zero, screenDc);
             if (createdDC) ReleaseDC(IntPtr.Zero, hdcSrc);
 
-            frame = new CapturedFrame(ms.ToArray(), _width, _height, (ulong)DateTime.UtcNow.Ticks);
+            frame = new CapturedFrame(ms.ToArray(), _width, _height, MonotonicClock.NowUs);
             return true;
         }
         catch { return false; }

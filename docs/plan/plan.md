@@ -1,6 +1,6 @@
 # Plan
 
-**Status: Blocked.** The H.264 Encoder MFT is registered, but exhaustive activation attempts have not produced an `IMFTransform`: `CoCreateInstance` with `IID_IMFTransform` returns `E_NOINTERFACE`; `IUnknown` activation succeeds but cannot be queried or marshalled as `IMFTransform`; `MFTEnumEx` returns zero transforms for the tested category/media-type combinations; and direct vtable calls fail with `AccessViolationException`. Public code found so far is not a confirmed working reference for this environment. Do not repeat activation experiments or infer vtable layout. Completion requires access to a known-good working Media Foundation H.264 implementation (deskstream, ParsecDisplay, or Microsoft sample) and adapting it to C# COM interop. The engine continues to use JPEG at approximately 15–17 FPS; other features are complete.
+**Status: Superseded.** The Media Foundation path is abandoned for v1 (ADR-011). H.264 now uses H264Sharp/OpenH264 and is verified end to end; the active plan is `docs/plan/h264-working.md`, with the baseline in `docs/plan/performance-baseline.md`.
 
 ## Scope
 - In: adapt a provided, working H.264 Media Foundation reference to C# COM interop, then complete the encoder and validate the existing Windows-to-Android stream path.

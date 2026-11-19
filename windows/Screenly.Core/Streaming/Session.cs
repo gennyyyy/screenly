@@ -10,6 +10,8 @@ public sealed class Session : IAsyncDisposable
     public TcpClient Client { get; }
     public NetworkStream Stream { get; }
     public bool HasHandshaked { get; set; }
+    // Streaming gate: set only after HELLO_ACK has been written. No VIDEO_FRAME before this.
+    public bool ReadyToStream { get; set; }
     public DateTime LastPong { get; set; } = DateTime.UtcNow;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
     public Session(TcpClient client)

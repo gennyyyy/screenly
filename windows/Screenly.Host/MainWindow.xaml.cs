@@ -9,6 +9,10 @@ public partial class MainWindow : System.Windows.Window
 {
     private readonly System.Windows.Forms.NotifyIcon _tray;
 
+    // True until ShowInfo has reflected the saved config into the selectors. Setting IsSelected
+    // raises SelectionChanged, and the app must never rewrite config.json just by starting.
+    private bool _suppressSelectionChange = true;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -41,15 +45,19 @@ public partial class MainWindow : System.Windows.Window
 
     private void ShowInfo()
     {
-        // Reflect current encoder in the selector
+        // Reflect current encoder and fps in the selectors under the guard: this must not save.
         try
         {
+            _suppressSelectionChange = true;
             var cfg = Screenly.Core.Config.ConfigStore.Load();
             var codec = (cfg.Encoding.Codec ?? "jpeg").ToLowerInvariant();
             foreach (ComboBoxItem item in CodecCombo.Items)
                 item.IsSelected = (string)item.Tag == codec;
+            foreach (ComboBoxItem item in FpsCombo.Items)
+                item.IsSelected = (string)item.Tag == cfg.Encoding.TargetFps.ToString();
         }
         catch { }
+        finally { _suppressSelectionChange = false; }
 
         for (int i = 0; i < 20; i++)
         {
@@ -71,6 +79,8 @@ public partial class MainWindow : System.Windows.Window
 
     private void CodecCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
+        // Initialization/reflection only: never save from here.
+        if (_suppressSelectionChange) return;
         if (CodecCombo.SelectedItem is not ComboBoxItem item) return;
         var codec = (string)item.Tag;
         try
@@ -80,6 +90,22 @@ public partial class MainWindow : System.Windows.Window
             cfg = cfg with { Encoding = cfg.Encoding with { Codec = codec } };
             Screenly.Core.Config.ConfigStore.Save(cfg);
             EncoderText.Text = codec.ToUpperInvariant();
+        }
+        catch { }
+    }
+
+    private void FpsCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        // Initialization/reflection only: never save from here.
+        if (_suppressSelectionChange) return;
+        if (FpsCombo.SelectedItem is not ComboBoxItem item) return;
+        if (!int.TryParse((string)item.Tag, out var fps)) return;
+        try
+        {
+            var cfg = Screenly.Core.Config.ConfigStore.Load();
+            if (cfg.Encoding.TargetFps == fps) return;
+            cfg = cfg with { Encoding = cfg.Encoding with { TargetFps = fps } };
+            Screenly.Core.Config.ConfigStore.Save(cfg);
         }
         catch { }
     }
@@ -106,6 +132,36 @@ public partial class MainWindow : System.Windows.Window
             ResolutionText.Text = $"{w} × {h}  @ {fps} fps";
             ConnectionText.Text = connType;
             DevicesText.Text = devices.ToString();
+
+            // H.264 diagnostics: specific error, or live stats when healthy.
+            var encoderError = root.TryGetProperty("encoderError", out var eeEl) && eeEl.ValueKind == System.Text.Json.JsonValueKind.String
+                ? eeEl.GetString()
+                : null;
+            if (!string.IsNullOrEmpty(encoderError))
+            {
+                EncoderErrorText.Text = "Encoder error: " + encoderError.Split('\n')[0].Trim();
+                EncoderErrorText.ToolTip = encoderError;
+                EncoderErrorText.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                EncoderErrorText.Text = "";
+                EncoderErrorText.Visibility = Visibility.Collapsed;
+            }
+
+            var frames = root.TryGetProperty("framesEncoded", out var feEl) ? feEl.GetInt64() : 0;
+            var bytesOut = root.TryGetProperty("bytesOut", out var boEl) ? boEl.GetInt64() : 0;
+            var msAvg = root.TryGetProperty("encodeMsAvg", out var eaEl) ? eaEl.GetDouble() : 0;
+            if (codec == "h264" && frames > 0)
+            {
+                H264StatsText.Text = $"{frames} frames · {bytesOut / 1048576.0:F1} MB · {msAvg:F1} ms avg encode";
+                H264StatsText.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                H264StatsText.Text = "";
+                H264StatsText.Visibility = Visibility.Collapsed;
+            }
         }
         catch { }
     }

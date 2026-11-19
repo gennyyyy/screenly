@@ -7,6 +7,7 @@ build/
 .superpowers/
 app/*
 !app/.gitkeep
+dist/
 local.properties
 android/local.properties
 .idea/

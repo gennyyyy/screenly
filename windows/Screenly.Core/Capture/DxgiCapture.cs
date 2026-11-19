@@ -4,6 +4,12 @@ namespace Screenly.Core.Capture;
 
 // DXGI Desktop Duplication capture (raw BGRA frames). Falls back to GDI BitBlt raw capture
 // when DXGI duplication cannot be initialized (e.g. permission/driver). Keeps ICapture shape.
+//
+// Buffer contract: the memory DC, DIB section and BGRA byte[] are created once per instance
+// (and again only when RefreshDimensions reports a size change), so TryGetFrame returns the same
+// byte[] each frame. The consumer must finish reading it before the next TryGetFrame or
+// RefreshDimensions call; the frame loop (Program.cs) encodes it synchronously in the same
+// iteration. One instance per session: never share a capture (or its buffer) between sessions.
 public sealed class DxgiCapture : ICapture
 {
     [DllImport("gdi32.dll", CharSet = CharSet.Auto)] private static extern IntPtr CreateDC(string lpszDriver, string? lpszDevice, string? lpszOutput, IntPtr lpInitData);
@@ -43,6 +49,13 @@ public sealed class DxgiCapture : ICapture
     private string? _deviceName;
     private IntPtr _hdcSrc = IntPtr.Zero;
     private int _width, _height;
+    // Reused GDI surface + managed copy target; see the buffer contract above.
+    private IntPtr _hdcMem = IntPtr.Zero;
+    private IntPtr _hBmp = IntPtr.Zero;
+    private IntPtr _oldBmp = IntPtr.Zero;
+    private IntPtr _bits = IntPtr.Zero;
+    private byte[]? _buffer;
+    private int _surfaceW, _surfaceH;
     private int _monitorX, _monitorY;
     private IntPtr _monitorHandle = IntPtr.Zero;
     private int _monitorDpi = 96;
@@ -91,48 +104,91 @@ public sealed class DxgiCapture : ICapture
             _monitorY = 0;
         }
         _running = true;
+        EnsureSurface();
     }
 
+    // Returns the instance's reusable BGRA buffer: valid until the next TryGetFrame or
+    // RefreshDimensions call.
     public bool TryGetFrame(out CapturedFrame frame)
     {
         frame = default;
         if (!_running) return false;
         try
         {
-            IntPtr hdcSrc = _hdcSrc != IntPtr.Zero ? _hdcSrc : IntPtr.Zero;
+            IntPtr hdcSrc = _hdcSrc;
             bool created = false;
             if (hdcSrc == IntPtr.Zero) { hdcSrc = GetDCWrapper(); created = true; }
             if (hdcSrc == IntPtr.Zero) return false;
 
-            var bmi = new BITMAPINFO();
-            bmi.bmiHeader.biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>();
-            bmi.bmiHeader.biWidth = _width;
-            bmi.bmiHeader.biHeight = -_height; // top-down
-            bmi.bmiHeader.biPlanes = 1;
-            bmi.bmiHeader.biBitCount = 32;
-            bmi.bmiHeader.biCompression = BI_RGB;
+            try
+            {
+                if (!EnsureSurface()) return false;
+                BitBlt(_hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
 
-            // Memory surface must come from the primary screen DC: DrawIconEx silently
-            // draws nothing when the surface is created from a secondary display DC.
-            var screenDc = GetDCWrapper();
-            var hdcMem = CreateCompatibleDC(screenDc);
-            var hBmp = CreateDIBSection(screenDc, ref bmi, DIB_RGB_COLORS, out var bits, IntPtr.Zero, 0);
-            if (hBmp == IntPtr.Zero || bits == IntPtr.Zero) { DeleteDC(hdcMem); ReleaseDCWrapper(screenDc); return false; }
-            SelectObject(hdcMem, hBmp);
-            BitBlt(hdcMem, 0, 0, _width, _height, hdcSrc, 0, 0, SRCCOPY);
+                var data = _buffer!;
+                Marshal.Copy(_bits, data, 0, data.Length);
 
-            var data = new byte[_width * _height * 4];
-            Marshal.Copy(bits, data, 0, data.Length);
-
-            DeleteObject(hBmp);
-            DeleteDC(hdcMem);
-            ReleaseDCWrapper(screenDc);
-            if (created) ReleaseDCWrapper(hdcSrc);
-
-            frame = new CapturedFrame(data, _width, _height, (ulong)DateTime.UtcNow.Ticks);
-            return true;
+                frame = new CapturedFrame(data, _width, _height, MonotonicClock.NowUs);
+                return true;
+            }
+            finally
+            {
+                if (created) ReleaseDCWrapper(hdcSrc);
+            }
         }
         catch { return false; }
+    }
+
+    // Creates (or recreates after a size change) the memory DC, DIB section and byte[] once.
+    // The surface must come from the primary screen DC: DrawIconEx silently draws nothing when
+    // it is created from a secondary display DC.
+    private bool EnsureSurface()
+    {
+        if (_hdcMem != IntPtr.Zero && _surfaceW == _width && _surfaceH == _height) return true;
+        ReleaseSurface();
+
+        var bmi = new BITMAPINFO();
+        bmi.bmiHeader.biSize = (uint)Marshal.SizeOf<BITMAPINFOHEADER>();
+        bmi.bmiHeader.biWidth = _width;
+        bmi.bmiHeader.biHeight = -_height; // top-down
+        bmi.bmiHeader.biPlanes = 1;
+        bmi.bmiHeader.biBitCount = 32;
+        bmi.bmiHeader.biCompression = BI_RGB;
+
+        var screenDc = GetDCWrapper();
+        if (screenDc == IntPtr.Zero) return false;
+        try
+        {
+            var hdcMem = CreateCompatibleDC(screenDc);
+            var hBmp = CreateDIBSection(screenDc, ref bmi, DIB_RGB_COLORS, out var bits, IntPtr.Zero, 0);
+            if (hdcMem == IntPtr.Zero || hBmp == IntPtr.Zero || bits == IntPtr.Zero)
+            {
+                if (hBmp != IntPtr.Zero) DeleteObject(hBmp);
+                if (hdcMem != IntPtr.Zero) DeleteDC(hdcMem);
+                return false;
+            }
+            _hdcMem = hdcMem;
+            _hBmp = hBmp;
+            _bits = bits;
+            _oldBmp = SelectObject(_hdcMem, _hBmp);
+            _buffer = new byte[_width * _height * 4];
+            _surfaceW = _width;
+            _surfaceH = _height;
+            return true;
+        }
+        finally { ReleaseDCWrapper(screenDc); }
+    }
+
+    private void ReleaseSurface()
+    {
+        if (_hdcMem != IntPtr.Zero && _oldBmp != IntPtr.Zero) SelectObject(_hdcMem, _oldBmp);
+        _oldBmp = IntPtr.Zero;
+        if (_hBmp != IntPtr.Zero) { DeleteObject(_hBmp); _hBmp = IntPtr.Zero; }
+        if (_hdcMem != IntPtr.Zero) { DeleteDC(_hdcMem); _hdcMem = IntPtr.Zero; }
+        _bits = IntPtr.Zero;
+        _buffer = null;
+        _surfaceW = 0;
+        _surfaceH = 0;
     }
 
     private IntPtr GetDCWrapper()
@@ -173,6 +229,7 @@ public sealed class DxgiCapture : ICapture
                 {
                     _width = w;
                     _height = h;
+                    EnsureSurface(); // recreate the GDI surface + buffer at the new size
                     changed = true;
                 }
             }
@@ -187,7 +244,13 @@ public sealed class DxgiCapture : ICapture
         return false;
     }
     public void Stop() => _running = false;
-    public void Dispose() => Stop();
+
+    public void Dispose()
+    {
+        Stop();
+        ReleaseSurface();
+        if (_hdcSrc != IntPtr.Zero) { DeleteDC(_hdcSrc); _hdcSrc = IntPtr.Zero; }
+    }
 
     private static string? FindVirtualDisplayDevice()
     {

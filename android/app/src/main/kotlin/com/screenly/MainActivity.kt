@@ -33,7 +33,11 @@ import com.screenly.service.ConnectionService
 import com.screenly.input.TouchCapture
 import com.screenly.video.VideoDecoder
 import com.screenly.video.DisplayGeometry
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.concurrent.Executors
 
 class MainActivity : ComponentActivity() {
     private lateinit var insetsController: WindowInsetsControllerCompat
@@ -86,8 +90,22 @@ fun ScreenlyApp(activity: Activity) {
     var cursorHotspotY by remember { mutableIntStateOf(0) }
     var hasCursorPos by remember { mutableStateOf(false) }
     val surfaceView = remember { SurfaceView(activity) }
-    val decoder = remember { VideoDecoder(surfaceView.holder) }
-    DisposableEffect(Unit) { onDispose { decoder.release() } }
+    val scope = rememberCoroutineScope()
+    val decoder = remember {
+        VideoDecoder(surfaceView.holder) { scope.launch { client.sendRequestKeyframe() } }
+    }
+    // Decoding runs on one dedicated thread. A slow decoder must never stall the socket reader or
+    // the control path, and MediaCodec plus its surface are only touched from this thread.
+    val videoDispatcher = remember {
+        Executors.newSingleThreadExecutor { r -> Thread(r, "screenly-video") }.asCoroutineDispatcher()
+    }
+    DisposableEffect(Unit) {
+        onDispose {
+            client.close() // stop the socket + receive loop with the composition
+            decoder.release()
+            videoDispatcher.close()
+        }
+    }
 
     // Loading screen state
     var retryToken by remember { mutableIntStateOf(0) }
@@ -129,9 +147,9 @@ fun ScreenlyApp(activity: Activity) {
                 showRetry = true
             }
         }
-        // Event collector
+        // Control path: never dropped, always on Main so UI state and cursor updates are safe.
         launch {
-            client.events.collect { ev ->
+            client.controlEvents.collect { ev ->
                 when (ev) {
                     is ServerEvent.HelloAcked -> {
                         connected = true
@@ -139,40 +157,11 @@ fun ScreenlyApp(activity: Activity) {
                         activity.startService(Intent(activity, ConnectionService::class.java))
                         statusText = "Waiting for first frame..."
                     }
-                    is ServerEvent.Frame -> {
-                        if (ev.w != streamW || ev.h != streamH) { streamW = ev.w; streamH = ev.h }
-                        // No auto-rotate: follow the tablet's physical orientation (manual rotation).
-                        if (ev.isJpeg) {
-                            val bmp = android.graphics.BitmapFactory.decodeByteArray(ev.nal, 0, ev.nal.size)
-                            if (bmp != null) {
-                                val canvas = try { surfaceView.holder.lockCanvas() } catch (_: Exception) { null }
-                                if (canvas != null) {
-                                    val vw = surfaceView.width.coerceAtLeast(1)
-                                    val vh = surfaceView.height.coerceAtLeast(1)
-                                    val content = DisplayGeometry.contentRect(vw, vh, bmp.width, bmp.height)
-                                    canvas.drawColor(android.graphics.Color.BLACK)
-                                    canvas.drawBitmap(bmp, null, android.graphics.RectF(content), null)
-                                    surfaceView.holder.unlockCanvasAndPost(canvas)
-                                }
-                                bmp.recycle()
-                                if (!firstFrameReceived) {
-                                    firstFrameReceived = true
-                                    showRetry = false
-                                }
-                            }
-                        } else {
-                            decoder.configure(ev.w, ev.h)
-                            decoder.decode(ev.nal, ev.tsUs, ev.keyframe)
-                            if (!firstFrameReceived) {
-                                firstFrameReceived = true
-                                showRetry = false
-                            }
-                        }
-                    }
                     is ServerEvent.Configured -> {
                         streamW = ev.c.width
                         streamH = ev.c.height
-                        decoder.configure(ev.c.width, ev.c.height)
+                        // The H.264 codec is configured by the video worker from the frame header,
+                        // so it is only ever driven from its own thread.
                     }
                     is ServerEvent.CursorPos -> {
                         cursorX = ev.x
@@ -197,6 +186,51 @@ fun ScreenlyApp(activity: Activity) {
                         activity.stopService(Intent(activity, ConnectionService::class.java))
                     }
                     else -> {}
+                }
+            }
+        }
+        // Video path: latest-frame only, off Main. A slow decode costs frames, never control.
+        launch(videoDispatcher) {
+            var lastSeq: Int? = null
+            client.frames.collect { ev ->
+                if (ev.w != streamW || ev.h != streamH) {
+                    withContext(Dispatchers.Main) { streamW = ev.w; streamH = ev.h }
+                }
+                if (ev.isJpeg) {
+                    lastSeq = null // JPEG frames do not advance the H.264 sequence
+                    val bmp = android.graphics.BitmapFactory.decodeByteArray(ev.nal, 0, ev.nal.size)
+                    if (bmp != null) {
+                        withContext(Dispatchers.Main) {
+                            val canvas = try { surfaceView.holder.lockCanvas() } catch (_: Exception) { null }
+                            if (canvas != null) {
+                                val vw = surfaceView.width.coerceAtLeast(1)
+                                val vh = surfaceView.height.coerceAtLeast(1)
+                                val content = DisplayGeometry.contentRect(vw, vh, bmp.width, bmp.height)
+                                canvas.drawColor(android.graphics.Color.BLACK)
+                                canvas.drawBitmap(bmp, null, android.graphics.RectF(content), null)
+                                surfaceView.holder.unlockCanvasAndPost(canvas)
+                            }
+                            bmp.recycle()
+                            if (!firstFrameReceived) {
+                                firstFrameReceived = true
+                                showRetry = false
+                            }
+                        }
+                    }
+                } else {
+                    // A gap means frames were dropped here or lost upstream. Only an IDR repairs
+                    // the reference chain, so ask for one and gate P-frames until it arrives.
+                    val prev = lastSeq
+                    if (prev != null && ev.seq != prev + 1) decoder.onSequenceGap()
+                    lastSeq = ev.seq
+                    decoder.configure(ev.w, ev.h)
+                    decoder.decode(ev.nal, ev.tsUs, ev.keyframe)
+                    if (!firstFrameReceived) {
+                        withContext(Dispatchers.Main) {
+                            firstFrameReceived = true
+                            showRetry = false
+                        }
+                    }
                 }
             }
         }

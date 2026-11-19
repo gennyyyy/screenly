@@ -28,4 +28,16 @@ public class ProtocolFramingTests
         Assert.Equal(MessageType.Ping, type);
         Assert.Equal(payload, got);
     }
+
+    [Fact]
+    public async Task RequestKeyframe_RoundTrip_EmptyPayload()
+    {
+        using var ms = new MemoryStream();
+        await Protocol.WriteMessageAsync(ms, MessageType.RequestKeyframe, Array.Empty<byte>());
+        ms.Position = 0;
+        var (type, got) = await Protocol.ReadMessageAsync(ms);
+        Assert.Equal(MessageType.RequestKeyframe, type);
+        Assert.Empty(got);
+        Assert.Equal(0x0D, (byte)MessageType.RequestKeyframe);
+    }
 }

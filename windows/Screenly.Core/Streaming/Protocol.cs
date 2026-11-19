@@ -14,6 +14,7 @@ public enum MessageType : byte
     Error = 0x0A,
     CursorPos = 0x0B,
     CursorShape = 0x0C,
+    RequestKeyframe = 0x0D,
 }
 
 public static class Protocol

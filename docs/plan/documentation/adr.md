@@ -72,3 +72,11 @@
 - **Rationale:** Minimal friction for home use; basic protection against drive-by connections on shared WiFi.
 - **Consequences:** Not enterprise-grade security; no TLS in v1 (LAN assumed trusted). Document limitation.
 - **Upgrade path:** Add TLS + certificate pinning if used on untrusted networks.
+
+## ADR-011: Software OpenH264 for H.264 v1; Media Foundation deferred
+- **Status:** Accepted
+- **Context:** ADR-007 selected Media Foundation hardware encoding. The H.264 MFT on the target Windows environment is registered but cannot be activated as a usable `IMFTransform`; 17+ activation attempts failed with `E_NOINTERFACE`, empty `MFTEnumEx` results, `MF_E_INVALIDMEDIATYPE`, and access violations. The shipping code already substitutes H264Sharp 1.6.0 (Cisco OpenH264) and produces decodable Annex B output.
+- **Decision:** For v1, use H264Sharp/OpenH264 Baseline software encoding, keep JPEG as the default and fallback, and defer hardware encoding. Packaging is self-contained win-x64. Revisit hardware only after the Phase 6 benchmark shows software encode or GDI capture is the limiting factor.
+- **Rationale:** A working software path is the smallest reliable step; blind Media Foundation activation is not a viable implementation strategy. Baseline is supported by OpenH264 and universally decodable by Android MediaCodec.
+- **Consequences:** Software encoding is CPU-bound; documented throughput is about 23 FPS at 1080p. Baseline has lower quality per bitrate than High, so text content needs a higher bitrate. ADR-007 remains unsatisfied until a hardware path is validated.
+- **Upgrade path:** Validate DXGI Desktop Duplication first; then evaluate NVENC/AMF/QuickSync or a verified Media Foundation implementation on named hardware.

@@ -14,6 +14,7 @@ sealed interface ClientMsg
 @Serializable data class Config(val width: Int, val height: Int, val fps: Int, val bitrateKbps: Int, val keyframeIntervalSec: Int = 2, val codec: String = "jpeg") : ClientMsg
 @Serializable data object Ping : ClientMsg
 @Serializable data object PongMsg : ClientMsg
+@Serializable data object RequestKeyframe : ClientMsg
 @Serializable data class Disconnect(val reason: String, val message: String? = null) : ClientMsg
 
 @Serializable
@@ -41,4 +42,5 @@ object Protocol {
     const val ERROR: Byte = 0x0A
     const val CURSOR_POS: Byte = 0x0B
     const val CURSOR_SHAPE: Byte = 0x0C
+    const val REQUEST_KEYFRAME: Byte = 0x0D
 }
