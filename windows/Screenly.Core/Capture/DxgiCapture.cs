@@ -69,6 +69,7 @@ public sealed class DxgiCapture : ICapture
     public int Width => _width;
     public int Height => _height;
     public int Orientation => _orientation;
+    public int MonitorDpi => _monitorDpi;
 
     public DxgiCapture(int quality = 70, string? deviceName = null, int encW = 1280, int encH = 720)
     {

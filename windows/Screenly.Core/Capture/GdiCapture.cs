@@ -19,6 +19,8 @@ public interface ICapture : IDisposable
     int Height { get; }
     // 0 = 0°, 1 = 90°, 2 = 180°, 3 = 270° clockwise (DEVMODE.dmDisplayOrientation).
     int Orientation { get; }
+    // Effective DPI of the captured monitor (96 = 100% scaling).
+    int MonitorDpi { get; }
 }
 
 public sealed class GdiCapture : ICapture
@@ -91,6 +93,7 @@ public sealed class GdiCapture : ICapture
     public int Width => _width;
     public int Height => _height;
     public int Orientation => _orientation;
+    public int MonitorDpi => _monitorDpi;
     private readonly int _quality;
     private static ImageCodecInfo? _jpegCodec;
 

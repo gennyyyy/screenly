@@ -1075,6 +1075,7 @@ public static class Program
 
         // Cursor sender loop (~60 Hz): streams CursorPos and broadcasts CursorShape on handle change.
         IntPtr lastCursorHandle = IntPtr.Zero;
+        int lastCursorDpi = 0;
         var cursorLoop = Task.Run(async () =>
         {
             while (!cts.IsCancellationRequested)
@@ -1084,7 +1085,17 @@ public static class Program
                     var ci = new CURSORINFO { cbSize = Marshal.SizeOf<CURSORINFO>() };
                     if (GetCursorInfo(ref ci))
                     {
-                        foreach (var kv in sessionStates.ToArray())
+                        var cursorSessions = sessionStates.ToArray();
+                        // Shape is global (one desktop cursor), so any session capture names the DPI.
+                        int cursorDpi = CursorScaling.BaseDpi;
+                        foreach (var kv in cursorSessions)
+                        {
+                            var c = kv.Value.Capture;
+                            if (c == null) continue;
+                            cursorDpi = c.MonitorDpi;
+                            break;
+                        }
+                        foreach (var kv in cursorSessions)
                         {
                             var sess = server.Sessions.FirstOrDefault(s => s.Id == kv.Key);
                             if (sess == null || !sess.HasHandshaked) continue;
@@ -1109,13 +1120,15 @@ public static class Program
                             BitConverter.TryWriteBytes(payload.AsSpan(9, 8), MonotonicClock.NowUs);
                             try { await sess.SendAsync(MessageType.CursorPos, payload, cts.Token); } catch { }
                         }
-                        if (ci.hCursor != lastCursorHandle)
+                        if (ci.hCursor != lastCursorHandle || cursorDpi != lastCursorDpi)
                         {
                             lastCursorHandle = ci.hCursor;
-                            var shape = CursorShapeCapture.Capture();
+                            lastCursorDpi = cursorDpi;
+                            var shape = CursorShapeCapture.Capture(cursorDpi);
                             if (shape.HasValue)
                             {
                                 var (sw, sh, hx, hy, png) = shape.Value;
+                                Log($"cursor shape: {sw}x{sh} hotspot={hx},{hy} dpi={cursorDpi}");
                                 var sp = new byte[16 + png.Length];
                                 BitConverter.TryWriteBytes(sp.AsSpan(0, 4), sw);
                                 BitConverter.TryWriteBytes(sp.AsSpan(4, 4), sh);
