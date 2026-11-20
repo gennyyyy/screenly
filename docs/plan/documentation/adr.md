@@ -80,3 +80,12 @@
 - **Rationale:** A working software path is the smallest reliable step; blind Media Foundation activation is not a viable implementation strategy. Baseline is supported by OpenH264 and universally decodable by Android MediaCodec.
 - **Consequences:** Software encoding is CPU-bound; documented throughput is about 23 FPS at 1080p. Baseline has lower quality per bitrate than High, so text content needs a higher bitrate. ADR-007 remains unsatisfied until a hardware path is validated.
 - **Upgrade path:** Validate DXGI Desktop Duplication first; then evaluate NVENC/AMF/QuickSync or a verified Media Foundation implementation on named hardware.
+
+## ADR-012: Per-client virtual-display lease pool (proposed)
+- **Status:** Proposed
+- **Context:** The current engine uses one shared Parsec VDD, so multiple clients mirror the same display and a resolution change recreates the shared display. An earlier per-client design added/removed a VDD on every connect/disconnect and caused ghost displays, failed REMOVE ioctls, topology changes, receive-loop stalls, and real-monitor disruption.
+- **Decision:** Introduce a bounded `DisplayPool` of VDD leases. A lease is created only when the pool grows, assigned to a session, and its removal is scheduled only when its last client disconnects. Removal is delayed by a 5 s grace period, cancelled by reconnect, serialized through one teardown worker, verified, and rate-limited. Client connect, codec/FPS change, and resolution change must not add or remove a display.
+- **Rationale:** Independent displays require per-client VDDs, but a naive remove-on-every-disconnect is the known churn source. A grace period absorbs transient reconnects; serialization prevents overlapping topology changes; verification prevents ghost accumulation.
+- **Consequences:** Per-disconnect removal can still briefly reflow the Windows desktop; this is accepted. Distinct resolutions are limited by the five Parsec registry preset slots. Each client consumes its own capture and software encoder, so CPU sets the practical device limit. Failed removals are quarantined for startup cleanup.
+- **Alternatives rejected:** per-session ADD/REMOVE with no grace or serialization (known churn); permanent parked displays (user requirement is removal on disconnect); shared display (no independent displays).
+- **Upgrade path:** A reliable per-target deactivate path could replace removal with parking only if the product requirement changes.

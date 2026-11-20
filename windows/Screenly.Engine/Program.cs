@@ -65,6 +65,30 @@ public static class DisplayHelper
     public const uint CDS_UPDATEREGISTRY = 0x00000001;
     public const uint CDS_TEST = 0x00000002;
     public const int DISP_CHANGE_SUCCESSFUL = 0;
+
+    // Current mode of an enumerated display (EnumDisplaySettings index -1), for the wait/verify
+    // path in VirtualDisplayMode.
+    public static VirtualDisplayMode.Mode? ReadMode(string deviceName)
+    {
+        var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
+        if (!EnumDisplaySettings(deviceName, -1, ref dm)) return null;
+        return new VirtualDisplayMode.Mode(dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayFrequency);
+    }
+
+    // Applies one mode to one display. Returns false when Windows rejects it; the caller reads the
+    // mode back and decides, so a rejection that still lands the right mode is acceptable.
+    public static bool ApplyMode(string deviceName, VirtualDisplayMode.Mode mode)
+    {
+        var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
+        if (!EnumDisplaySettings(deviceName, -1, ref dm)) return false;
+        dm.dmPelsWidth = mode.Width;
+        dm.dmPelsHeight = mode.Height;
+        dm.dmDisplayFrequency = mode.RefreshHz;
+        dm.dmFields = (int)(DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY);
+        var rc = ChangeDisplaySettingsEx(deviceName, ref dm, IntPtr.Zero, CDS_UPDATEREGISTRY, IntPtr.Zero);
+        Program.Log($"ChangeDisplaySettingsEx {deviceName} {mode}: rc={rc}");
+        return rc == DISP_CHANGE_SUCCESSFUL;
+    }
 }
 
 // Windows quantizes waits to the system timer (~15.6 ms by default), so Task.Delay rounds a 33 ms
@@ -261,6 +285,7 @@ public static class Program
         // One shared virtual display reused by all sessions (no per-client VDD churn).
         DisplayManager? sharedDm = null;
         DisplayHandle? sharedHandle = null;
+        string? sharedDeviceName = null;
         int sharedW = 0, sharedH = 0;
         string requestedCodec = (cfg.Encoding.Codec ?? "jpeg").ToLowerInvariant();
         // FramePacer treats <= 0 as "unset"; keep that semantic and clamp the rest to the pacer's range.
@@ -272,7 +297,9 @@ public static class Program
 
         byte[]? currentShapePayload = null;
 
-        async Task CreateCaptureForState(SessionState state)
+        // deviceName pins the capture to the verified virtual display instead of re-discovering
+        // "last Parsec device" after the mode change.
+        async Task CreateCaptureForState(SessionState state, string? deviceName = null)
         {
             try { state.Capture?.Stop(); } catch { }
             state.Capture?.Dispose();
@@ -283,7 +310,7 @@ public static class Program
 
             if (requestedCodec == "h264")
             {
-                var dc = new DxgiCapture(70);
+                var dc = new DxgiCapture(70, deviceName);
                 H264Encoder? enc = null;
                 try
                 {
@@ -306,7 +333,7 @@ public static class Program
                     enc?.Dispose();
                     state.Encoder = null;
                     state.UseH264 = false;
-                    var gc = new GdiCapture(30);
+                    var gc = new GdiCapture(30, deviceName);
                     gc.Start(0);
                     state.Capture = gc;
                 }
@@ -314,7 +341,7 @@ public static class Program
             else
             {
                 encoderInitError = null;
-                var gc = new GdiCapture(70);
+                var gc = new GdiCapture(70, deviceName);
                 gc.Start(0);
                 state.Capture = gc;
                 state.UseH264 = false;
@@ -338,17 +365,21 @@ public static class Program
             return null;
         }
 
-        async Task CreateDisplayForState(SessionState state, int width, int height)
+        // Returns false when the requested virtual display cannot be created and verified at
+        // width x height. Callers must fail the session: never capture the primary/old mode instead.
+        async Task<bool> CreateDisplayForState(SessionState state, int width, int height)
         {
-            bool created = false;
+            var requested = new VirtualDisplayMode.Mode(width, height, cfg.VirtualDisplay.RefreshHz);
+            string? devName = null;
             try
             {
-                // Reuse the shared virtual display when the resolution already matches.
+                // Reuse the shared virtual display when the resolution already matches. The mode was
+                // verified when it was created, so a reuse needs no display round-trip.
                 if (sharedHandle is { } sh && sharedW == width && sharedH == height && sharedDm != null)
                 {
                     state.Display = sharedDm;
-                    Log($"reusing existing VDD handle {sh.Id} at {width}x{height}");
-                    created = true;
+                    devName = sharedDeviceName;
+                    Log($"reusing existing VDD handle {sh.Id} at {width}x{height} ({devName ?? "device unknown"})");
                 }
                 else
                 {
@@ -356,75 +387,66 @@ public static class Program
                     if (sharedDm != null)
                     {
                         try { await sharedDm.RemoveAsync(); } catch { }
-                        sharedDm = null; sharedHandle = null;
+                        sharedDm = null; sharedHandle = null; sharedDeviceName = null;
                     }
                     var dm = new DisplayManager(vddDriver);
                     var handle = await dm.CreateAsync(width, height, cfg.VirtualDisplay.RefreshHz);
                     Log($"CreateAsync result: success, handle {handle.Id} ({width}x{height})");
+
+                    // ADD returns before Windows enumerates the monitor: poll instead of a single
+                    // lookup, then apply and read back the mode on the enumerated device.
+                    devName = await VirtualDisplayMode.WaitForDeviceAsync(GdiCapture.FindVirtualDisplayDevicePublic);
+                    if (devName == null)
+                    {
+                        Log($"VDD attach failed: handle {handle.Id} device not enumerated within {VirtualDisplayMode.WaitTimeoutMs} ms ({requested}); removing it");
+                        await RemoveQuietlyAsync(dm);
+                        return false;
+                    }
+                    Log($"VDD device enumerated: {devName}");
+
+                    // Extend first so the mode apply is the last display state change; the verify
+                    // then describes the final mode the capture will use.
+                    try { SetDisplayConfig(0, IntPtr.Zero, 0, IntPtr.Zero, SDC_TOPOLOGY_EXTEND | SDC_APPLY); } catch { }
+
+                    var applied = await VirtualDisplayMode.ApplyAndVerifyAsync(
+                        devName, requested, DisplayHelper.ReadMode, DisplayHelper.ApplyMode);
+                    if (!applied.Verified)
+                    {
+                        Log($"VDD mode not applied: requested {requested}, actual {Describe(applied.Actual)} after {VirtualDisplayMode.ApplyAttempts} attempts; removing it");
+                        await RemoveQuietlyAsync(dm);
+                        return false;
+                    }
+                    Log($"VDD mode verified: {applied.Actual}");
+
                     sharedDm = dm;
                     sharedHandle = handle;
+                    sharedDeviceName = devName;
                     sharedW = width; sharedH = height;
                     state.Display = dm;
-                    created = true;
-
-                    var devName = GdiCapture.FindVirtualDisplayDevicePublic();
-                    if (devName != null)
-                    {
-                        try
-                        {
-                            var cdm = new DisplayHelper.DEVMODE();
-                            cdm.dmSize = (short)Marshal.SizeOf<DisplayHelper.DEVMODE>();
-                            if (DisplayHelper.EnumDisplaySettings(devName, -1, ref cdm))
-                            {
-                                cdm.dmPelsWidth = width;
-                                cdm.dmPelsHeight = height;
-                                cdm.dmDisplayFrequency = cfg.VirtualDisplay.RefreshHz;
-                                cdm.dmFields = (int)(DisplayHelper.DM_PELSWIDTH | DisplayHelper.DM_PELSHEIGHT | DisplayHelper.DM_DISPLAYFREQUENCY);
-                                int rc = DisplayHelper.ChangeDisplaySettingsEx(devName, ref cdm, IntPtr.Zero, DisplayHelper.CDS_UPDATEREGISTRY, IntPtr.Zero);
-                                Log($"ChangeDisplaySettingsEx: rc={rc}");
-                            }
-                        }
-                        catch (Exception ex) { Log($"ChangeDisplaySettingsEx failed: {ex.Message}"); }
-                    }
-                    else
-                    {
-                        Log("FindVirtualDisplayDevice returned null");
-                    }
-                    try { SetDisplayConfig(0, IntPtr.Zero, 0, IntPtr.Zero, SDC_TOPOLOGY_EXTEND | SDC_APPLY); } catch { }
                 }
             }
             catch (Exception ex)
             {
-                Log($"CreateAsync failed ({ex.Message}); falling back to primary capture (no VDD retry).");
-                created = false;
+                Log($"VDD setup failed for {requested}: {ex.Message}");
+                return false;
             }
-            if (created)
-            {
-                await CreateCaptureForState(state);
-                var codec = state.UseH264 ? "h264" : "jpeg";
-                var cw = state.Capture?.Width ?? width;
-                var ch = state.Capture?.Height ?? height;
-                WriteStatusFile(codec, cw, ch, requestedFps, "USB", 0, state.Encoder, encoderInitError, state, pacer.Overruns);
-            }
-            else
-            {
-                Log("CreateDisplayAt: no virtual display; falling back to primary screen capture.");
-                try
-                {
-                    var gc = new GdiCapture(70);
-                    gc.Start(0);
-                    state.Capture = gc;
-                    Log($"Fallback capture started: {gc.Width}x{gc.Height}");
-                    WriteStatusFile("jpeg", gc.Width, gc.Height, requestedFps, "USB", 0, null, encoderInitError);                }
-                catch (Exception ex)
-                {
-                    Log($"Fallback capture failed: {ex.Message}");
-                    state.Capture = null;
-                }
-            }
+
+            await CreateCaptureForState(state, devName);
+            var codec = state.UseH264 ? "h264" : "jpeg";
+            var cw = state.Capture?.Width ?? width;
+            var ch = state.Capture?.Height ?? height;
+            WriteStatusFile(codec, cw, ch, requestedFps, "USB", 0, state.Encoder, encoderInitError, state, pacer.Overruns);
+            return true;
         }
 
-        async Task RecreateSessionAsync(Session session, SessionState state, int tw, int th)
+        static string Describe(VirtualDisplayMode.Mode? mode) => mode?.ToString() ?? "unreadable";
+
+        static async Task RemoveQuietlyAsync(DisplayManager dm)
+        {
+            try { await dm.RemoveAsync(); } catch { }
+        }
+
+        async Task<bool> RecreateSessionAsync(Session session, SessionState state, int tw, int th)
         {
             state.Capture?.Stop();
             state.Capture?.Dispose();
@@ -432,7 +454,7 @@ public static class Program
             state.Encoder?.Dispose();
             state.Encoder = null;
             await Task.Delay(500);
-            await CreateDisplayForState(state, tw, th);
+            if (!await CreateDisplayForState(state, tw, th)) return false;
             state.Width = state.Capture?.Width ?? tw;
             state.Height = state.Capture?.Height ?? th;
             if (state.Capture != null)
@@ -441,6 +463,21 @@ public static class Program
                 map[state.DeviceId] = (tw, th);
                 SavePersistedResolutions(map);
             }
+            return true;
+        }
+
+        // Terminal setup failure: report it and close, so the client reconnects instead of waiting
+        // on a session that will never stream.
+        async Task FailSessionAsync(Session session, string code, string message)
+        {
+            Log($"session {session.Id} failed: {code}: {message}");
+            try
+            {
+                await session.SendAsync(MessageType.Error,
+                    Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { code, message })));
+            }
+            catch { }
+            try { session.Client.Close(); } catch { } // MonitorSessionAsync removes and disposes the state
         }
 
         // Per-session capture timing: successful frames only, so captureMs min/avg/max reflect the
@@ -575,11 +612,12 @@ public static class Program
                         }
 
                         var state = new SessionState(cfg.Encoding.KeyframeIntervalSec) { DeviceId = deviceId };
+                        bool displayReady;
                         await displayLock.WaitAsync();
                         try
                         {
-                            await CreateDisplayForState(state, targetW, targetH);
-                            if (state.Capture != null)
+                            displayReady = await CreateDisplayForState(state, targetW, targetH);
+                            if (displayReady)
                             {
                                 var m = LoadPersistedResolutions();
                                 m[deviceId] = (targetW, targetH);
@@ -587,6 +625,13 @@ public static class Program
                             }
                         }
                         finally { displayLock.Release(); }
+                        if (!displayReady)
+                        {
+                            // No silent downgrade to the primary/old mode: fail the handshake.
+                            await FailSessionAsync(session, "DISPLAY_LOST",
+                                $"virtual display {targetW}x{targetH}@{cfg.VirtualDisplay.RefreshHz}Hz could not be created or verified");
+                            break;
+                        }
                         state.Width = state.Capture?.Width ?? targetW;
                         state.Height = state.Capture?.Height ?? targetH;
                         sessionStates[session.Id] = state; 
@@ -669,9 +714,17 @@ public static class Program
                             else { tw = cfg.VirtualDisplay.Width; th = cfg.VirtualDisplay.Height; }
                             if (st.Capture == null || st.Capture.Width != tw || st.Capture.Height != th)
                             {
+                                bool recreated;
                                 await displayLock.WaitAsync();
-                                try { await RecreateSessionAsync(session, st, tw, th); }
+                                try { recreated = await RecreateSessionAsync(session, st, tw, th); }
                                 finally { displayLock.Release(); }
+                                if (!recreated)
+                                {
+                                    // The old capture was already torn down; do not keep streaming it.
+                                    await FailSessionAsync(session, "DISPLAY_LOST",
+                                        $"virtual display {tw}x{th}@{cfg.VirtualDisplay.RefreshHz}Hz could not be created or verified");
+                                    break;
+                                }
                                 try { WriteStatusFile(st.UseH264 ? "h264" : "jpeg", st.Capture?.Width ?? cfg.VirtualDisplay.Width, st.Capture?.Height ?? cfg.VirtualDisplay.Height, requestedFps, "USB", server.Sessions.Count(s => s.HasHandshaked), st.Encoder, encoderInitError, st, pacer.Overruns); } catch { }
                             }
                         }
