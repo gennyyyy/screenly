@@ -147,12 +147,13 @@ public sealed class DisplayPool : IDisposable
             int used = _leases.Count + _pendingAdds + _quarantined.Count;
             if (used < _maxDisplays)
             {
+                _pendingAdds++;
                 if (!await WaitForRateLimitUnlockedAsync(ct))
                 {
+                    _pendingAdds--;
                     LastError = PoolErrorCodes.NoDisplay;
                     return null;
                 }
-                _pendingAdds++;
                 DisplayHandle handle;
                 try
                 {
@@ -225,12 +226,13 @@ public sealed class DisplayPool : IDisposable
                     Removed++;
                     _lastMutationUtc = _clock.GetUtcNow();
                     // add new
+                    _pendingAdds++;
                     if (!await WaitForRateLimitUnlockedAsync(ct))
                     {
+                        _pendingAdds--;
                         LastError = PoolErrorCodes.NoDisplay;
                         return null;
                     }
-                    _pendingAdds++;
                     DisplayHandle handle;
                     try
                     {
@@ -326,7 +328,10 @@ public sealed class DisplayPool : IDisposable
             if (_clock == TimeProvider.System)
                 timeoutTask = Task.Delay(TimeSpan.FromSeconds(5), ct);
             else
-                timeoutTask = WaitForTime(TimeSpan.FromSeconds(5), ct);
+                // fake clock: keep clock-based timer for determinism, but add a real
+                // Task.Delay fallback so the timeout can never hang forever if time
+                // is never advanced.
+                timeoutTask = Task.WhenAny(WaitForTime(TimeSpan.FromSeconds(5), ct), Task.Delay(TimeSpan.FromSeconds(5), ct));
             var completed = await Task.WhenAny(waitTask, timeoutTask);
             if (completed == timeoutTask) return false;
             await waitTask;
@@ -345,7 +350,7 @@ public sealed class DisplayPool : IDisposable
         }
         finally
         {
-            await _stateLock.WaitAsync(ct);
+            await _stateLock.WaitAsync();
         }
     }
 
