@@ -19,6 +19,8 @@ public sealed class DisplayPool : IDisposable
 
     public int MaxDisplays => _maxDisplays;
     public int RemoveGraceSeconds { get; }
+    public IReadOnlyList<DisplayLease> Leases => _leases;
+    public IReadOnlyList<DisplayLease> QuarantinedLeases => _quarantined;
 
     public int Created { get; private set; }
     public int Reused { get; private set; }
@@ -502,6 +504,13 @@ public sealed class DisplayPool : IDisposable
         {
             _stateLock.Release();
         }
+    }
+
+    public (DisplayLease[] leases, DisplayLease[] quarantined) Snapshot()
+    {
+        _stateLock.Wait();
+        try { return (_leases.ToArray(), _quarantined.ToArray()); }
+        finally { _stateLock.Release(); }
     }
 
     public void Dispose()

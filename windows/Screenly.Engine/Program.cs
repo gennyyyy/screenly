@@ -203,13 +203,37 @@ public static class Program
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "Screenly", "status.json");
 
-    public static void WriteStatusFile(string codec, int width, int height, int fps, string connectionType = "USB", int connectedDevices = 0, H264Encoder? encoder = null, string? encoderError = null, SessionState? state = null, long pacerOverruns = 0)
+    public static void WriteStatusFile(string codec, int width, int height, int fps, string connectionType = "USB", int connectedDevices = 0, H264Encoder? encoder = null, string? encoderError = null, SessionState? state = null, long pacerOverruns = 0, DisplayPool? pool = null)
     {
         try
         {
             var dir = Path.GetDirectoryName(StatusFilePath);
             if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
             encoderError ??= encoder?.LastError;
+            var (poolLeases, poolQuarantined) = pool != null ? pool.Snapshot() : (Array.Empty<DisplayLease>(), Array.Empty<DisplayLease>());
+            var displays = poolLeases.Select(l => new
+            {
+                displayId = l.Id,
+                width = l.Width,
+                height = l.Height,
+                orientation = l.Orientation,
+                state = l.State.ToString(),
+                sessionId = l.SessionId,
+            }).ToArray();
+            var quarantined = poolQuarantined.Select(l => l.Id).ToArray();
+            var counters = pool == null ? null : new
+            {
+                created = pool.Created,
+                reused = pool.Reused,
+                modeChanges = pool.ModeChanges,
+                removalScheduled = pool.RemovalScheduled,
+                removalCanceled = pool.RemovalCanceled,
+                removed = pool.Removed,
+                removeFailures = pool.RemoveFailures,
+                quarantined = pool.Quarantined,
+                replacedInPlace = pool.ReplacedInPlace,
+                reconnectedWithin60sAfterRemove = pool.ReconnectedWithin60sAfterRemove,
+            };
             var payload = JsonSerializer.Serialize(new
             {
                 codec, width, height, fps, connectionType, connectedDevices,
@@ -230,6 +254,9 @@ public static class Program
                 captureMsMax = Math.Round(state?.CaptureMsMax ?? 0, 1),
                 sendMsAvg = Math.Round(state?.SendMsAvg ?? 0, 1),
                 sendMsMax = Math.Round(state?.SendMsMax ?? 0, 1),
+                displays,
+                quarantined,
+                counters,
             });
             var tmp = StatusFilePath + ".tmp";
             File.WriteAllText(tmp, payload);
@@ -465,7 +492,7 @@ public static class Program
             var codec = state.UseH264 ? "h264" : "jpeg";
             var cw = state.Capture?.Width ?? width;
             var ch = state.Capture?.Height ?? height;
-            WriteStatusFile(codec, cw, ch, requestedFps, "USB", 0, state.Encoder, encoderInitError, state, pacer.Overruns);
+            WriteStatusFile(codec, cw, ch, requestedFps, "USB", 0, state.Encoder, encoderInitError, state, pacer.Overruns, displayPool);
             return true;
         }
 
@@ -589,7 +616,7 @@ public static class Program
                 if (st.Lease != null) displayPool?.Release(st.Lease);
                 st.Lease = null;
             }
-            try { WriteStatusFile(requestedCodec, cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height, requestedFps, "USB", server.Sessions.Count(x => x.HasHandshaked), null, encoderInitError); } catch { }
+            try { WriteStatusFile(requestedCodec, cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height, requestedFps, "USB", server.Sessions.Count(x => x.HasHandshaked), null, encoderInitError, null, 0, displayPool); } catch { }
         };
 
         server.MessageHandler = async (session, type, payload) =>
@@ -669,7 +696,7 @@ public static class Program
                         state.Height = state.Capture?.Height ?? targetH;
                         sessionStates[session.Id] = state; 
  
-                        WriteStatusFile(state.UseH264 ? "h264" : "jpeg", state.Capture?.Width ?? cfg.VirtualDisplay.Width, state.Capture?.Height ?? cfg.VirtualDisplay.Height, requestedFps, "USB", server.Sessions.Count(s => s.HasHandshaked), state.Encoder, encoderInitError, state, pacer.Overruns);
+                        WriteStatusFile(state.UseH264 ? "h264" : "jpeg", state.Capture?.Width ?? cfg.VirtualDisplay.Width, state.Capture?.Height ?? cfg.VirtualDisplay.Height, requestedFps, "USB", server.Sessions.Count(s => s.HasHandshaked), state.Encoder, encoderInitError, state, pacer.Overruns, displayPool);
                         var activeCodecNow = state.UseH264 ? "h264" : "jpeg";
                         var cw = state.Capture?.Width ?? cfg.VirtualDisplay.Width;
                         var ch = state.Capture?.Height ?? cfg.VirtualDisplay.Height;
@@ -759,7 +786,7 @@ public static class Program
                                         $"virtual display {tw}x{th}@{cfg.VirtualDisplay.RefreshHz}Hz could not be created or verified");
                                     break;
                                 }
-                                try { WriteStatusFile(st.UseH264 ? "h264" : "jpeg", st.Capture?.Width ?? cfg.VirtualDisplay.Width, st.Capture?.Height ?? cfg.VirtualDisplay.Height, requestedFps, "USB", server.Sessions.Count(s => s.HasHandshaked), st.Encoder, encoderInitError, st, pacer.Overruns); } catch { }
+                                try { WriteStatusFile(st.UseH264 ? "h264" : "jpeg", st.Capture?.Width ?? cfg.VirtualDisplay.Width, st.Capture?.Height ?? cfg.VirtualDisplay.Height, requestedFps, "USB", server.Sessions.Count(s => s.HasHandshaked), st.Encoder, encoderInitError, st, pacer.Overruns, displayPool); } catch { }
                             }
                         }
                         // Reply with the applied config (capture-sourced), so CONFIG carries the
@@ -1089,7 +1116,7 @@ public static class Program
                     var codec = st0?.UseH264 == true ? "h264" : "jpeg";
                     var cw = st0?.Capture?.Width ?? cfg.VirtualDisplay.Width;
                     var ch = st0?.Capture?.Height ?? cfg.VirtualDisplay.Height;
-                    try { WriteStatusFile(codec, cw, ch, fps, "USB", server.Sessions.Count(s => s.HasHandshaked), st0?.Encoder, encoderInitError, st0, pacer.Overruns); } catch { }
+                    try { WriteStatusFile(codec, cw, ch, fps, "USB", server.Sessions.Count(s => s.HasHandshaked), st0?.Encoder, encoderInitError, st0, pacer.Overruns, displayPool); } catch { }
                     // Drop attribution once per second: skipped (slot busy before capture) vs replaced
                     // (encoded, then superseded) vs pacer overrun (frame work exceeded the period).
                     var sendMin = st0?.SendMsMin ?? 0;
