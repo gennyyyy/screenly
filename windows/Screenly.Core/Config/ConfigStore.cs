@@ -14,13 +14,21 @@ public static class ConfigStore
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
-    public static AppConfig Load()
+    public static AppConfig Load(string? path = null)
     {
         try
         {
-            if (!File.Exists(ConfigPath)) return new AppConfig();
-            var json = File.ReadAllText(ConfigPath);
-            return JsonSerializer.Deserialize<AppConfig>(json, JsonOpts) ?? new AppConfig();
+            var p = path ?? ConfigPath;
+            if (!File.Exists(p)) return new AppConfig();
+            var json = File.ReadAllText(p);
+            var cfg = JsonSerializer.Deserialize<AppConfig>(json, JsonOpts) ?? new AppConfig();
+            var vd = cfg.VirtualDisplay;
+            var clamped = vd with
+            {
+                MaxDisplays = Math.Clamp(vd.MaxDisplays, 1, 8),
+                RemoveGraceSeconds = Math.Clamp(vd.RemoveGraceSeconds, 1, 300),
+            };
+            return clamped == vd ? cfg : cfg with { VirtualDisplay = clamped };
         }
         catch (Exception ex)
         {
