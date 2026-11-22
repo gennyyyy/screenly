@@ -376,22 +376,25 @@ public static class Program
             if (displayPool != null)
             {
                 // Pool path: acquire a lease (reuses/mode-changes/grows as needed).
+                var priorLease = state.Lease;
                 try
                 {
                     var lease = await displayPool.AcquireAsync(width, height, cfg.VirtualDisplay.RefreshHz, state.DeviceId);
                     if (lease == null)
                     {
+                        if (priorLease != null) displayPool?.Release(priorLease);
                         state.Lease = null;
                         return false;
                     }
                     state.Lease = lease;
-                    lease.ClientId = state.DeviceId;
+                    Log($"pool acquired lease {lease.Id} device {lease.DeviceName} at {width}x{height}");
                     await CreateCaptureForState(state, lease.DeviceName);
                     return state.Capture != null;
                 }
                 catch (Exception ex)
                 {
                     Log($"pool acquire failed for {width}x{height}: {ex.Message}");
+                    if (state.Lease != null) { displayPool?.Release(state.Lease); state.Lease = null; }
                     return false;
                 }
             }

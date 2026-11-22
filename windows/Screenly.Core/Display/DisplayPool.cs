@@ -143,9 +143,10 @@ public sealed class DisplayPool : IDisposable
                 }
             }
 
-            // 4. Grow
+            // 4. Grow (skip when client already owns an assigned lease: replace in place instead)
+            var ownAssigned = _leases.FirstOrDefault(l => l.ClientId == clientId && l.State == LeaseState.Assigned);
             int used = _leases.Count + _pendingAdds + _quarantined.Count;
-            if (used < _maxDisplays)
+            if (used < _maxDisplays && ownAssigned == null)
             {
                 _pendingAdds++;
                 if (!await WaitForRateLimitUnlockedAsync(ct))
