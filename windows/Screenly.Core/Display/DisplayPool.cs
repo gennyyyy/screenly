@@ -13,6 +13,7 @@ public sealed class DisplayPool : IDisposable
     private readonly List<DisplayLease> _quarantined = new();
     private int _pendingAdds;
     private int _nextId = 1;
+    private DateTimeOffset _lastMutationUtc = DateTimeOffset.MinValue;
     private bool _disposed;
     private Task _teardownTask;
 
@@ -29,6 +30,7 @@ public sealed class DisplayPool : IDisposable
     public int Quarantined { get; private set; }
     public int ReplacedInPlace { get; private set; }
     public int ReconnectedWithin60sAfterRemove { get; private set; }
+    public string? LastError { get; private set; }
 
     public DisplayPool(IDisplayDriver driver, TimeProvider clock, int maxDisplays, int graceSeconds)
     {
@@ -50,40 +52,52 @@ public sealed class DisplayPool : IDisposable
         await _stateLock.WaitAsync(ct);
         try
         {
+            LastError = null;
             // 1. Reconnect affinity
             DisplayLease? affinity = _leases.FirstOrDefault(l =>
                 l.ClientId == clientId && (l.State == LeaseState.Free || l.State == LeaseState.PendingRemove));
 
             if (affinity != null)
             {
-                if (affinity.State == LeaseState.PendingRemove)
-                {
-                    affinity.State = LeaseState.Assigned;
-                    affinity.RemoveDueAt = null;
-                    RemovalCanceled++;
-                    ReconnectedWithin60sAfterRemove++;
-                }
                 // exact?
                 if (affinity.Width == width && affinity.Height == height && affinity.Hz == hz)
                 {
-                    affinity.State = LeaseState.Assigned;
+                    if (affinity.State == LeaseState.PendingRemove)
+                    {
+                        affinity.State = LeaseState.Assigned;
+                        affinity.RemoveDueAt = null;
+                        RemovalCanceled++;
+                        ReconnectedWithin60sAfterRemove++;
+                    }
+                    else
+                    {
+                        affinity.State = LeaseState.Assigned;
+                    }
                     affinity.Width = width; affinity.Height = height; affinity.Hz = hz;
                     Reused++;
                     return affinity;
                 }
-                // mode change attempt
+                // mode change attempt (do not cancel removal until it succeeds)
                 bool changed = await TryModeChange(affinity, width, height, hz, ct);
                 if (changed)
                 {
-                    affinity.State = LeaseState.Assigned;
+                    if (affinity.State == LeaseState.PendingRemove)
+                    {
+                        affinity.State = LeaseState.Assigned;
+                        affinity.RemoveDueAt = null;
+                        RemovalCanceled++;
+                        ReconnectedWithin60sAfterRemove++;
+                    }
+                    else
+                    {
+                        affinity.State = LeaseState.Assigned;
+                    }
                     ModeChanges++;
                     return affinity;
                 }
-                // failed; fall through (affinity not assigned)
-                affinity.State = affinity.RemoveDueAt.HasValue ? LeaseState.PendingRemove : LeaseState.Free;
-                // restore pending removal deadline? if canceled we lost it; re-set grace
-                if (affinity.State == LeaseState.PendingRemove && affinity.RemoveDueAt == null)
-                    affinity.RemoveDueAt = _clock.GetUtcNow().AddSeconds(RemoveGraceSeconds);
+                // failed; leave lease in PendingRemove with original deadline
+                if (affinity.State != LeaseState.PendingRemove)
+                    affinity.State = LeaseState.Free;
             }
 
             // 2. Exact mode (any client)
@@ -133,6 +147,11 @@ public sealed class DisplayPool : IDisposable
             int used = _leases.Count + _pendingAdds + _quarantined.Count;
             if (used < _maxDisplays)
             {
+                if (!await WaitForRateLimitAsync(ct))
+                {
+                    LastError = PoolErrorCodes.NoDisplay;
+                    return null;
+                }
                 _pendingAdds++;
                 DisplayHandle handle;
                 try
@@ -155,7 +174,7 @@ public sealed class DisplayPool : IDisposable
                     Width = width,
                     Height = height,
                     Hz = hz,
-                    Orientation = 0,
+                    Orientation = attached.Orientation,
                     State = LeaseState.Assigned,
                     ClientId = clientId,
                     SessionId = null
@@ -167,6 +186,7 @@ public sealed class DisplayPool : IDisposable
                 }
                 _leases.Add(lease);
                 Created++;
+                _lastMutationUtc = _clock.GetUtcNow();
                 return lease;
             }
 
@@ -182,6 +202,11 @@ public sealed class DisplayPool : IDisposable
             }
             if (replaceCandidate != null)
             {
+                if (!await WaitForRateLimitAsync(ct))
+                {
+                    LastError = PoolErrorCodes.NoDisplay;
+                    return null;
+                }
                 // remove
                 using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
                 bool ok = false;
@@ -198,7 +223,13 @@ public sealed class DisplayPool : IDisposable
                 {
                     _leases.Remove(replaceCandidate);
                     Removed++;
+                    _lastMutationUtc = _clock.GetUtcNow();
                     // add new
+                    if (!await WaitForRateLimitAsync(ct))
+                    {
+                        LastError = PoolErrorCodes.NoDisplay;
+                        return null;
+                    }
                     _pendingAdds++;
                     DisplayHandle handle;
                     try
@@ -221,7 +252,7 @@ public sealed class DisplayPool : IDisposable
                         Width = width,
                         Height = height,
                         Hz = hz,
-                        Orientation = 0,
+                        Orientation = attached.Orientation,
                         State = LeaseState.Assigned,
                         ClientId = clientId,
                         SessionId = null
@@ -229,6 +260,7 @@ public sealed class DisplayPool : IDisposable
                     _leases.Add(lease);
                     Created++;
                     ReplacedInPlace++;
+                    _lastMutationUtc = _clock.GetUtcNow();
                     return lease;
                 }
                 else
@@ -244,6 +276,10 @@ public sealed class DisplayPool : IDisposable
             }
 
             // 6. reject
+            if (_quarantined.Count > 0 && _leases.Count + _quarantined.Count >= _maxDisplays)
+                LastError = PoolErrorCodes.PoolDegraded;
+            else
+                LastError = PoolErrorCodes.NoDisplay;
             return null;
         }
         finally
@@ -274,12 +310,30 @@ public sealed class DisplayPool : IDisposable
         }
     }
 
-    // Fix: remove ModeChanges increments inside TryModeChange. We'll instead not touch counters there.
-    // (The above adjustments are messy; rewrite below by editing.)
-
-    public void Release(DisplayLease lease)
+    private async Task<bool> WaitForRateLimitAsync(CancellationToken ct)
     {
-        _stateLock.Wait();
+        var since = _clock.GetUtcNow() - _lastMutationUtc;
+        if (since >= TimeSpan.FromSeconds(2)) return true;
+        var wait = TimeSpan.FromSeconds(2) - since;
+        if (wait > TimeSpan.FromSeconds(5)) wait = TimeSpan.FromSeconds(5);
+        if (wait <= TimeSpan.Zero) return true;
+        try
+        {
+            var waitTask = WaitForTime(wait, ct);
+            var timeoutTask = Task.Delay(TimeSpan.FromSeconds(5), ct);
+            var completed = await Task.WhenAny(waitTask, timeoutTask);
+            if (completed == timeoutTask) return false;
+            await waitTask;
+        }
+        catch (OperationCanceledException) { return false; }
+        if (_clock.GetUtcNow() - _lastMutationUtc < TimeSpan.FromSeconds(2)) return false;
+        return true;
+    }
+
+    public void Release(DisplayLease? lease)
+    {
+        if (lease == null) return;
+        _stateLock.WaitAsync().GetAwaiter().GetResult();
         try
         {
             if (lease.State != LeaseState.Assigned) return;
@@ -395,6 +449,7 @@ public sealed class DisplayPool : IDisposable
                 _leases.Remove(lease);
                 lease.State = LeaseState.Removed;
                 Removed++;
+                _lastMutationUtc = _clock.GetUtcNow();
             }
             else
             {
@@ -403,6 +458,7 @@ public sealed class DisplayPool : IDisposable
                 lease.State = LeaseState.Quarantined;
                 RemoveFailures++;
                 Quarantined++;
+                _lastMutationUtc = _clock.GetUtcNow();
             }
         }
         finally

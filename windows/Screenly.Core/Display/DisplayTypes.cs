@@ -2,7 +2,7 @@ namespace Screenly.Core.Display;
 
 public readonly record struct DisplayHandle(int Id);
 public readonly record struct DisplayInfo(int Id, string Name, int Width, int Height, int RefreshHz, bool IsVirtual);
-public readonly record struct AttachedDisplay(DisplayHandle Handle, string DeviceName, string Identity, int Width, int Height, int RefreshHz);
+public readonly record struct AttachedDisplay(DisplayHandle Handle, string DeviceName, string Identity, int Width, int Height, int RefreshHz, int Orientation = 0);
 public readonly record struct DisplayMode(int Width, int Height, int RefreshHz);
 
 public enum LeaseState
