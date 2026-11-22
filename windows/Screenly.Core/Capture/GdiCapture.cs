@@ -230,6 +230,39 @@ public sealed class GdiCapture : ICapture
     public void Dispose() => Stop();
 
     public static string? FindVirtualDisplayDevicePublic() => FindVirtualDisplayDevice();
+    public static List<string> EnumerateParsecDevices()
+    {
+        var result = new List<string>();
+        var dd = new DISPLAY_DEVICE { cb = Marshal.SizeOf<DISPLAY_DEVICE>() };
+        uint i = 0;
+        while (EnumDisplayDevices(null, i, ref dd, 0))
+        {
+            if ((dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP) != 0 &&
+                (dd.DeviceString.Contains("Parsec", StringComparison.OrdinalIgnoreCase) ||
+                 dd.DeviceName.Contains("Parsec", StringComparison.OrdinalIgnoreCase) ||
+                 dd.DeviceID.Contains("Parsec", StringComparison.OrdinalIgnoreCase)))
+            {
+                var name = dd.DeviceName;
+                var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
+                int w = 0, h = 0, orient = 0;
+                if (EnumDisplaySettings(name, -1, ref dm))
+                {
+                    w = dm.dmPelsWidth;
+                    h = dm.dmPelsHeight;
+                    orient = DisplayOrientation.Normalize(dm.dmDisplayOrientation);
+                }
+                var monitorDd = new DISPLAY_DEVICE { cb = Marshal.SizeOf<DISPLAY_DEVICE>() };
+                string monitorPath = "";
+                if (EnumDisplayDevices(name, 0, ref monitorDd, 0)) monitorPath = monitorDd.DeviceID;
+                Console.WriteLine($"[GdiCapture] Parsec device index={i} name={name} size={w}x{h} orientation={orient} monitorPath={monitorPath}");
+                result.Add(name);
+            }
+            i++;
+            dd.cb = Marshal.SizeOf<DISPLAY_DEVICE>();
+        }
+        result.Sort();
+        return result;
+    }
     private static string? FindVirtualDisplayDevice()
     {
         var dd = new DISPLAY_DEVICE { cb = Marshal.SizeOf<DISPLAY_DEVICE>() };
@@ -244,7 +277,20 @@ public sealed class GdiCapture : ICapture
                     dd.DeviceName.Contains("Parsec", StringComparison.OrdinalIgnoreCase) ||
                     dd.DeviceID.Contains("Parsec", StringComparison.OrdinalIgnoreCase))
                 {
-                    last = dd.DeviceName;
+                    var name = dd.DeviceName;
+                    var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
+                    int w = 0, h = 0, orient = 0;
+                    if (EnumDisplaySettings(name, -1, ref dm))
+                    {
+                        w = dm.dmPelsWidth;
+                        h = dm.dmPelsHeight;
+                        orient = DisplayOrientation.Normalize(dm.dmDisplayOrientation);
+                    }
+                    var monitorDd = new DISPLAY_DEVICE { cb = Marshal.SizeOf<DISPLAY_DEVICE>() };
+                    string monitorPath = "";
+                    if (EnumDisplayDevices(name, 0, ref monitorDd, 0)) monitorPath = monitorDd.DeviceID;
+                    Console.WriteLine($"[GdiCapture] FindVirtualDisplayDevice index={i} name={name} size={w}x{h} orientation={orient} monitorPath={monitorPath}");
+                    last = name;
                 }
             }
             i++;
