@@ -147,7 +147,7 @@ public sealed class DisplayPool : IDisposable
             int used = _leases.Count + _pendingAdds + _quarantined.Count;
             if (used < _maxDisplays)
             {
-                if (!await WaitForRateLimitAsync(ct))
+                if (!await WaitForRateLimitUnlockedAsync(ct))
                 {
                     LastError = PoolErrorCodes.NoDisplay;
                     return null;
@@ -202,7 +202,7 @@ public sealed class DisplayPool : IDisposable
             }
             if (replaceCandidate != null)
             {
-                if (!await WaitForRateLimitAsync(ct))
+                if (!await WaitForRateLimitUnlockedAsync(ct))
                 {
                     LastError = PoolErrorCodes.NoDisplay;
                     return null;
@@ -225,7 +225,7 @@ public sealed class DisplayPool : IDisposable
                     Removed++;
                     _lastMutationUtc = _clock.GetUtcNow();
                     // add new
-                    if (!await WaitForRateLimitAsync(ct))
+                    if (!await WaitForRateLimitUnlockedAsync(ct))
                     {
                         LastError = PoolErrorCodes.NoDisplay;
                         return null;
@@ -320,7 +320,13 @@ public sealed class DisplayPool : IDisposable
         try
         {
             var waitTask = WaitForTime(wait, ct);
-            var timeoutTask = Task.Delay(TimeSpan.FromSeconds(5), ct);
+            Task timeoutTask;
+            // real-clock escape hatch only: use real Task.Delay for the system clock,
+            // clock-based timer for injected (fake) clocks.
+            if (_clock == TimeProvider.System)
+                timeoutTask = Task.Delay(TimeSpan.FromSeconds(5), ct);
+            else
+                timeoutTask = WaitForTime(TimeSpan.FromSeconds(5), ct);
             var completed = await Task.WhenAny(waitTask, timeoutTask);
             if (completed == timeoutTask) return false;
             await waitTask;
@@ -330,10 +336,28 @@ public sealed class DisplayPool : IDisposable
         return true;
     }
 
-    public void Release(DisplayLease? lease)
+    private async Task<bool> WaitForRateLimitUnlockedAsync(CancellationToken ct)
     {
-        if (lease == null) return;
-        _stateLock.WaitAsync().GetAwaiter().GetResult();
+        _stateLock.Release();
+        try
+        {
+            return await WaitForRateLimitAsync(ct);
+        }
+        finally
+        {
+            await _stateLock.WaitAsync(ct);
+        }
+    }
+
+    public Task ReleaseAsync(DisplayLease? lease)
+    {
+        if (lease == null) return Task.CompletedTask;
+        return ReleaseCoreAsync(lease);
+    }
+
+    private async Task ReleaseCoreAsync(DisplayLease lease)
+    {
+        await _stateLock.WaitAsync();
         try
         {
             if (lease.State != LeaseState.Assigned) return;
@@ -347,6 +371,13 @@ public sealed class DisplayPool : IDisposable
         {
             _stateLock.Release();
         }
+    }
+
+    // Sync wrapper; sync-over-async is intentional for callers that cannot await.
+    public void Release(DisplayLease? lease)
+    {
+        if (lease == null) return;
+        ReleaseAsync(lease).GetAwaiter().GetResult();
     }
 
     private async Task TeardownLoop()
