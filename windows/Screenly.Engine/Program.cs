@@ -123,7 +123,7 @@ public sealed class SessionState
 {
     public SessionState(int keyframeIntervalSec) => Keyframes = new KeyframePolicy(keyframeIntervalSec);
 
-    public DisplayManager Display { get; set; } = default!;
+    public DisplayLease? Lease { get; set; }
     public ICapture? Capture { get; set; }
     public H264Encoder? Encoder { get; set; }
     public bool UseH264 { get; set; }
@@ -280,6 +280,10 @@ public static class Program
         var cfg = ConfigStore.Load();
         using var vddDriver = new ParsecVddDisplay();
 
+        var displayPool = cfg.VirtualDisplay.PerClientDisplays
+            ? new DisplayPool(vddDriver, TimeProvider.System, cfg.VirtualDisplay.MaxDisplays, cfg.VirtualDisplay.RemoveGraceSeconds)
+            : null;
+
         var displayLock = new SemaphoreSlim(1, 1);
         var sessionStates = new ConcurrentDictionary<Guid, SessionState>();
         // One shared virtual display reused by all sessions (no per-client VDD churn).
@@ -369,6 +373,29 @@ public static class Program
         // width x height. Callers must fail the session: never capture the primary/old mode instead.
         async Task<bool> CreateDisplayForState(SessionState state, int width, int height)
         {
+            if (displayPool != null)
+            {
+                // Pool path: acquire a lease (reuses/mode-changes/grows as needed).
+                try
+                {
+                    var lease = await displayPool.AcquireAsync(width, height, cfg.VirtualDisplay.RefreshHz, state.DeviceId);
+                    if (lease == null)
+                    {
+                        state.Lease = null;
+                        return false;
+                    }
+                    state.Lease = lease;
+                    lease.ClientId = state.DeviceId;
+                    await CreateCaptureForState(state, lease.DeviceName);
+                    return state.Capture != null;
+                }
+                catch (Exception ex)
+                {
+                    Log($"pool acquire failed for {width}x{height}: {ex.Message}");
+                    return false;
+                }
+            }
+
             var requested = new VirtualDisplayMode.Mode(width, height, cfg.VirtualDisplay.RefreshHz);
             string? devName = null;
             try
@@ -377,7 +404,7 @@ public static class Program
                 // verified when it was created, so a reuse needs no display round-trip.
                 if (sharedHandle is { } sh && sharedW == width && sharedH == height && sharedDm != null)
                 {
-                    state.Display = sharedDm;
+                    // legacy shared path: no per-state display handle needed
                     devName = sharedDeviceName;
                     Log($"reusing existing VDD handle {sh.Id} at {width}x{height} ({devName ?? "device unknown"})");
                 }
@@ -422,7 +449,7 @@ public static class Program
                     sharedHandle = handle;
                     sharedDeviceName = devName;
                     sharedW = width; sharedH = height;
-                    state.Display = dm;
+                    // legacy: state display handle not tracked per session
                 }
             }
             catch (Exception ex)
@@ -555,7 +582,9 @@ public static class Program
                 try { st.Capture?.Stop(); } catch { }
                 st.Capture?.Dispose();
                 st.Encoder?.Dispose();
-                // Shared VDD is kept for reuse by the next client (no churn).
+                // Release the lease back to the pool (scheduled removal after grace).
+                if (st.Lease != null) displayPool?.Release(st.Lease);
+                st.Lease = null;
             }
             try { WriteStatusFile(requestedCodec, cfg.VirtualDisplay.Width, cfg.VirtualDisplay.Height, requestedFps, "USB", server.Sessions.Count(x => x.HasHandshaked), null, encoderInitError); } catch { }
         };
@@ -628,7 +657,8 @@ public static class Program
                         if (!displayReady)
                         {
                             // No silent downgrade to the primary/old mode: fail the handshake.
-                            await FailSessionAsync(session, "DISPLAY_LOST",
+                            var errCode = displayPool != null ? (displayPool.LastError ?? PoolErrorCodes.NoDisplay) : "DISPLAY_LOST";
+                            await FailSessionAsync(session, errCode,
                                 $"virtual display {targetW}x{targetH}@{cfg.VirtualDisplay.RefreshHz}Hz could not be created or verified");
                             break;
                         }
@@ -721,7 +751,8 @@ public static class Program
                                 if (!recreated)
                                 {
                                     // The old capture was already torn down; do not keep streaming it.
-                                    await FailSessionAsync(session, "DISPLAY_LOST",
+                                    var cfgErr = displayPool != null ? (displayPool.LastError ?? PoolErrorCodes.NoDisplay) : "DISPLAY_LOST";
+                                    await FailSessionAsync(session, cfgErr,
                                         $"virtual display {tw}x{th}@{cfg.VirtualDisplay.RefreshHz}Hz could not be created or verified");
                                     break;
                                 }
@@ -1154,11 +1185,13 @@ public static class Program
 
         foreach (var kv in sessionStates.ToArray())
         {
+            if (kv.Value.Lease != null) displayPool?.Release(kv.Value.Lease);
             StopSender(kv.Value);
             try { kv.Value.Capture?.Stop(); } catch { }
             kv.Value.Capture?.Dispose();
             kv.Value.Encoder?.Dispose();
         }
+        displayPool?.Dispose();
         sessionStates.Clear();
         await server.DisposeAsync();
     }
