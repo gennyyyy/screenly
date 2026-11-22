@@ -3,7 +3,7 @@ using Microsoft.Win32;
 
 namespace Screenly.Core.Display;
 
-public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
+public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisplayDriver, IDisposable
 {
     private const uint VDD_IOCTL_ADD     = 0x0022e004;
     private const uint VDD_IOCTL_REMOVE  = 0x0022a008;
@@ -273,6 +273,9 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
         catch { }
     }
 
+    public Task<DisplayHandle> AddAsync(int width, int height, int refreshHz, CancellationToken ct = default)
+        => CreateAsync(width, height, refreshHz, ct);
+
     public Task<DisplayHandle> CreateAsync(int width, int height, int refreshHz, CancellationToken ct = default)
     {
         var h = OpenHandle();
@@ -360,9 +363,8 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
 
     public Task SetModeAsync(DisplayHandle handle, int width, int height, int refreshHz, CancellationToken ct = default)
     {
-        // Parsec VDD doesn't have a set-mode IOCTL; mode is fixed at creation.
-        // Ping to keep alive.
-        return PingAsync(ct);
+        // Phase 3 fills in ChangeDisplaySettingsEx. For now no-op.
+        return Task.CompletedTask;
     }
 
     public Task PingAsync(CancellationToken ct = default)
@@ -372,6 +374,14 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisposable
     }
 
     public IEnumerable<DisplayInfo> Enumerate() => _displays.Select(kv => new DisplayInfo(kv.Key, $"Parsec VDD {kv.Key}", 0, 0, 0, true));
+
+    public IEnumerable<AttachedDisplay> EnumerateAttached() => _displays.Select(kv =>
+        new AttachedDisplay(new DisplayHandle(kv.Key), $"Parsec VDD {kv.Key}", $"Parsec VDD {kv.Key}", 0, 0, 0));
+
+    public DisplayMode? ReadMode(string deviceName) => null;
+
+    public string? ResolveIdentity(DisplayHandle handle) =>
+        _displays.ContainsKey(handle.Id) ? $"Parsec VDD {handle.Id}" : null;
 
     private void StartPing()
     {
