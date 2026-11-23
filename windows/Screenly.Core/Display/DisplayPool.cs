@@ -33,6 +33,7 @@ public sealed class DisplayPool : IDisposable
     public int ReplacedInPlace { get; private set; }
     public int ReconnectedWithin60sAfterRemove { get; private set; }
     public string? LastError { get; private set; }
+    public void SetLastError(string? code) => LastError = code;
 
     public DisplayPool(IDisplayDriver driver, TimeProvider clock, int maxDisplays, int graceSeconds)
     {
@@ -55,6 +56,7 @@ public sealed class DisplayPool : IDisposable
         try
         {
             LastError = null;
+            bool modeChangeFailed = false;
             // 1. Reconnect affinity
             DisplayLease? affinity = _leases.FirstOrDefault(l =>
                 l.ClientId == clientId && (l.State == LeaseState.Free || l.State == LeaseState.PendingRemove));
@@ -75,12 +77,14 @@ public sealed class DisplayPool : IDisposable
                     {
                         affinity.State = LeaseState.Assigned;
                     }
+                    affinity.ClientId = clientId;
                     affinity.Width = width; affinity.Height = height; affinity.Hz = hz;
                     Reused++;
                     return affinity;
                 }
                 // mode change attempt (do not cancel removal until it succeeds)
                 bool changed = await TryModeChange(affinity, width, height, hz, ct);
+                if (!changed) modeChangeFailed = true;
                 if (changed)
                 {
                     if (affinity.State == LeaseState.PendingRemove)
@@ -94,6 +98,7 @@ public sealed class DisplayPool : IDisposable
                     {
                         affinity.State = LeaseState.Assigned;
                     }
+                    affinity.ClientId = clientId;
                     ModeChanges++;
                     return affinity;
                 }
@@ -120,6 +125,7 @@ public sealed class DisplayPool : IDisposable
                 {
                     exact.State = LeaseState.Assigned;
                 }
+                exact.ClientId = clientId;
                 Reused++;
                 return exact;
             }
@@ -128,6 +134,7 @@ public sealed class DisplayPool : IDisposable
             foreach (var candidate in _leases.Where(l => l.State == LeaseState.Free || l.State == LeaseState.PendingRemove).ToList())
             {
                 bool changed = await TryModeChange(candidate, width, height, hz, ct);
+                if (!changed) modeChangeFailed = true;
                 if (changed)
                 {
                     if (candidate.State == LeaseState.PendingRemove)
@@ -140,6 +147,7 @@ public sealed class DisplayPool : IDisposable
                     {
                         candidate.State = LeaseState.Assigned;
                     }
+                    candidate.ClientId = clientId;
                     ModeChanges++;
                     return candidate;
                 }
@@ -281,7 +289,9 @@ public sealed class DisplayPool : IDisposable
             }
 
             // 6. reject
-            if (_quarantined.Count > 0 && _leases.Count + _quarantined.Count >= _maxDisplays)
+            if (modeChangeFailed)
+                LastError = PoolErrorCodes.ModeUnsupported;
+            else if (_quarantined.Count > 0 && _leases.Count + _quarantined.Count >= _maxDisplays)
                 LastError = PoolErrorCodes.PoolDegraded;
             else
                 LastError = PoolErrorCodes.NoDisplay;

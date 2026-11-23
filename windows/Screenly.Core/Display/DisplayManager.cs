@@ -244,7 +244,11 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisplayDriver, 
                     slot = i;
                 }
             }
-            if (slot == -1) slot = 0;
+            if (slot == -1)
+            {
+                Log("EnsureRegistryPreset: no free slot (all 5 occupied); not overwriting");
+                return false;
+            }
             using var key = baseKey.CreateSubKey(slot.ToString(), true);
             key.SetValue("width", width, RegistryValueKind.DWord);
             key.SetValue("height", height, RegistryValueKind.DWord);
@@ -407,6 +411,7 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisplayDriver, 
         if (removed)
         {
             _displays.Remove(handle.Id);
+            _deviceNames.Remove(handle.Id);
             RemovePersistedIndex(index);
             Log($"VDD removed index {index}");
             await PingAsync();
@@ -416,6 +421,7 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisplayDriver, 
         {
             // Removal failed: drop from active set so stale cleanup can handle the orphan later.
             _displays.Remove(handle.Id);
+            _deviceNames.Remove(handle.Id);
             Log($"VDD RemoveAsync FAILED for index {index} (Win32Error={werr}); orphaned index persisted");
             throw new System.ComponentModel.Win32Exception(werr);
         }

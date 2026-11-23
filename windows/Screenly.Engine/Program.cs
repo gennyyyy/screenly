@@ -404,10 +404,25 @@ public static class Program
                     state.Lease = null;
                     return false;
                 }
+                if (string.IsNullOrEmpty(lease.DeviceName))
+                {
+                    displayPool.SetLastError(PoolErrorCodes.DisplayMappingFailed);
+                    displayPool.Release(lease);
+                    if (priorLease != null) displayPool.Release(priorLease);
+                    state.Lease = null;
+                    return false;
+                }
                 state.Lease = lease;
                 Log($"pool acquired lease {lease.Id} device {lease.DeviceName} at {width}x{height}");
                 await CreateCaptureForState(state, lease.DeviceName);
-                return state.Capture != null;
+                if (state.Capture == null)
+                {
+                    displayPool.Release(lease);
+                    if (priorLease != null) displayPool.Release(priorLease);
+                    state.Lease = null;
+                    return false;
+                }
+                return true;
             }
             catch (Exception ex)
             {
@@ -1081,7 +1096,7 @@ public static class Program
                             int h = cap?.Height ?? 0;
                             int rx = ci.ptScreenPos.x - mx;
                             int ry = ci.ptScreenPos.y - my;
-                            bool inBounds = (w <= 0 || h <= 0) || (rx >= 0 && rx <= w && ry >= 0 && ry <= h);
+                            bool inBounds = (w <= 0 || h <= 0) || (rx >= 0 && rx < w && ry >= 0 && ry < h);
                             int x = rx; int y = ry;
                             if (x < 0) x = 0;
                             if (y < 0) y = 0;
