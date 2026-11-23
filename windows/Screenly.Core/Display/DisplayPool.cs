@@ -300,9 +300,12 @@ public sealed class DisplayPool : IDisposable
             await _driver.SetModeAsync(lease.Handle, width, height, hz, ct);
             // verify readback if possible
             var mode = _driver.ReadMode(lease.DeviceName);
-            if (mode.HasValue && (mode.Value.Width != width || mode.Value.Height != height || mode.Value.RefreshHz != hz))
+            if (mode.HasValue)
             {
-                // mismatch; but still accept? spec says verify. We'll accept if SetMode succeeded for fake.
+                if (mode.Value.Width != width || mode.Value.Height != height)
+                    return false;
+                if (mode.Value.RefreshHz != 0 && Math.Abs(mode.Value.RefreshHz - hz) > 1)
+                    return false;
             }
             lease.Width = width;
             lease.Height = height;

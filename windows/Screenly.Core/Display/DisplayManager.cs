@@ -1,5 +1,6 @@
 using System.Runtime.InteropServices;
 using Microsoft.Win32;
+using Screenly.Core.Capture;
 
 namespace Screenly.Core.Display;
 
@@ -46,6 +47,52 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisplayDriver, 
     [DllImport("user32.dll")]
     private static extern int SetDisplayConfig(uint numPathArrayElements, IntPtr pathArray, uint numModeArrayElements, IntPtr modeArray, uint flags);
 
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi)]
+    private struct DEVMODE
+    {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+        public short dmSpecVersion;
+        public short dmDriverVersion;
+        public short dmSize;
+        public short dmDriverExtra;
+        public int dmFields;
+        public int dmPositionX;
+        public int dmPositionY;
+        public int dmDisplayOrientation;
+        public int dmDisplayFixedOutput;
+        public short dmColor;
+        public short dmDuplex;
+        public short dmYResolution;
+        public short dmTTOption;
+        public short dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+        public short dmLogPixels;
+        public int dmBitsPerPel;
+        public int dmPelsWidth;
+        public int dmPelsHeight;
+        public int dmDisplayFlags;
+        public int dmDisplayFrequency;
+        public int dmICMMethod;
+        public int dmICMIntent;
+        public int dmMediaType;
+        public int dmDitherType;
+        public int dmReserved1;
+        public int dmReserved2;
+        public int dmPanningWidth;
+        public int dmPanningHeight;
+    }
+
+    [DllImport("user32.dll", CharSet = CharSet.Ansi)]
+    private static extern int ChangeDisplaySettingsEx(string lpszDeviceName, ref DEVMODE lpDevMode, IntPtr hwnd, uint dwflags, IntPtr lParam);
+    [DllImport("user32.dll", CharSet = CharSet.Ansi)]
+    private static extern bool EnumDisplaySettings(string lpszDeviceName, int iModeNum, ref DEVMODE lpDevMode);
+
+    private const uint DM_PELSWIDTH = 0x00080000;
+    private const uint DM_PELSHEIGHT = 0x00100000;
+    private const uint DM_DISPLAYFREQUENCY = 0x00400000;
+    private const uint CDS_UPDATEREGISTRY = 0x00000001;
+    private const int DISP_CHANGE_SUCCESSFUL = 0;
+
     private const uint DIGCF_PRESENT = 0x00000002;
     private const uint DIGCF_DEVICEINTERFACE = 0x00000010;
     private const uint GENERIC_READ = 0x80000000;
@@ -79,6 +126,7 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisplayDriver, 
     private IntPtr _handle = IntPtr.Zero;
     private IntPtr _syncHandle = IntPtr.Zero;
     private readonly Dictionary<int, int> _displays = new();
+    private readonly Dictionary<int, string> _deviceNames = new();
     private int _nextId = 1;
     private Thread? _pingThread;
     private volatile bool _running;
@@ -276,10 +324,12 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisplayDriver, 
     public Task<DisplayHandle> AddAsync(int width, int height, int refreshHz, CancellationToken ct = default)
         => CreateAsync(width, height, refreshHz, ct);
 
-    public Task<DisplayHandle> CreateAsync(int width, int height, int refreshHz, CancellationToken ct = default)
+    public async Task<DisplayHandle> CreateAsync(int width, int height, int refreshHz, CancellationToken ct = default)
     {
         var h = OpenHandle();
         if (h == IntPtr.Zero) throw new InvalidOperationException("Parsec VDD device not found (driver not installed?)");
+        // snapshot before ADD for device-name resolution
+        var beforeDevices = new HashSet<string>(GdiCapture.EnumerateParsecDevices());
         // Clean up stale displays from previous (crashed) runs synchronously
         // before creating a new one, to prevent ghost VDD accumulation.
         if (_displays.Count == 0)
@@ -313,8 +363,18 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisplayDriver, 
         try { IoControl(VDD_IOCTL_UPDATE, new byte[32], null, 1000); } catch { }
         var handle = new DisplayHandle(_nextId++);
         _displays[handle.Id] = index;
+        // resolve device name by diffing enumerated Parsec devices
+        string? newDevice = null;
+        for (int attempt = 0; attempt < 5 && string.IsNullOrEmpty(newDevice); attempt++)
+        {
+            try { await Task.Delay(100, ct); } catch { break; }
+            ct.ThrowIfCancellationRequested();
+            var after = GdiCapture.EnumerateParsecDevices();
+            newDevice = after.FirstOrDefault(d => !beforeDevices.Contains(d));
+        }
+        if (!string.IsNullOrEmpty(newDevice)) _deviceNames[handle.Id] = newDevice!;
         StartPing();
-        return Task.FromResult(handle);
+        return handle;
     }
 
     public async Task RemoveAsync(DisplayHandle handle, CancellationToken ct = default)
@@ -363,7 +423,48 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisplayDriver, 
 
     public Task SetModeAsync(DisplayHandle handle, int width, int height, int refreshHz, CancellationToken ct = default)
     {
-        // Phase 3 fills in ChangeDisplaySettingsEx. For now no-op.
+        if (!_displays.TryGetValue(handle.Id, out _))
+            throw new InvalidOperationException($"Unknown display handle {handle.Id}");
+
+        // Write registry preset for the new mode.
+        try
+        {
+            if (!EnsureRegistryPreset(width, height, refreshHz))
+                Log($"SetModeAsync: EnsureRegistryPreset failed for {width}x{height}@{refreshHz}");
+        }
+        catch (Exception ex) { Log($"SetModeAsync: EnsureRegistryPreset threw: {ex.Message}"); }
+
+        var deviceName = _deviceNames.TryGetValue(handle.Id, out var dn) ? dn : ResolveIdentity(handle);
+        if (string.IsNullOrEmpty(deviceName))
+        {
+            Log($"SetModeAsync: no device name for handle {handle.Id}");
+            return Task.CompletedTask;
+        }
+
+        // Call ChangeDisplaySettingsEx on the device.
+        var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
+        if (EnumDisplaySettings(deviceName, -1, ref dm))
+        {
+            dm.dmPelsWidth = width;
+            dm.dmPelsHeight = height;
+            dm.dmDisplayFrequency = refreshHz;
+            dm.dmFields = (int)(DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY);
+        }
+        else
+        {
+            dm.dmSize = (short)Marshal.SizeOf<DEVMODE>();
+            dm.dmPelsWidth = width;
+            dm.dmPelsHeight = height;
+            dm.dmDisplayFrequency = refreshHz;
+            dm.dmFields = (int)(DM_PELSWIDTH | DM_PELSHEIGHT | DM_DISPLAYFREQUENCY);
+        }
+        var rc = ChangeDisplaySettingsEx(deviceName, ref dm, IntPtr.Zero, CDS_UPDATEREGISTRY, IntPtr.Zero);
+        Log($"SetModeAsync {deviceName} {width}x{height}@{refreshHz}Hz: rc={rc}");
+
+        // Verify readback via EnumDisplaySettings.
+        var verify = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
+        if (EnumDisplaySettings(deviceName, -1, ref verify))
+            Log($"SetModeAsync readback {deviceName}: {verify.dmPelsWidth}x{verify.dmPelsHeight}@{verify.dmDisplayFrequency}Hz");
         return Task.CompletedTask;
     }
 
@@ -376,12 +477,31 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisplayDriver, 
     public IEnumerable<DisplayInfo> Enumerate() => _displays.Select(kv => new DisplayInfo(kv.Key, $"Parsec VDD {kv.Key}", 0, 0, 0, true));
 
     public IEnumerable<AttachedDisplay> EnumerateAttached() => _displays.Select(kv =>
-        new AttachedDisplay(new DisplayHandle(kv.Key), $"Parsec VDD {kv.Key}", $"Parsec VDD {kv.Key}", 0, 0, 0));
+    {
+        var devName = _deviceNames.TryGetValue(kv.Key, out var dn) ? dn : $"Parsec VDD {kv.Key}";
+        int w = 0, h = 0, hz = 0, orient = 0;
+        if (_deviceNames.TryGetValue(kv.Key, out var name))
+        {
+            var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
+            if (EnumDisplaySettings(name, -1, ref dm))
+            {
+                w = dm.dmPelsWidth; h = dm.dmPelsHeight; hz = dm.dmDisplayFrequency;
+                orient = Screenly.Core.Capture.DisplayOrientation.Normalize(dm.dmDisplayOrientation);
+            }
+        }
+        return new AttachedDisplay(new DisplayHandle(kv.Key), devName, devName, w, h, hz, orient);
+    });
 
-    public DisplayMode? ReadMode(string deviceName) => null;
+    public DisplayMode? ReadMode(string deviceName)
+    {
+        if (string.IsNullOrEmpty(deviceName)) return null;
+        var dm = new DEVMODE { dmSize = (short)Marshal.SizeOf<DEVMODE>() };
+        if (!EnumDisplaySettings(deviceName, -1, ref dm)) return null;
+        return new DisplayMode(dm.dmPelsWidth, dm.dmPelsHeight, dm.dmDisplayFrequency);
+    }
 
     public string? ResolveIdentity(DisplayHandle handle) =>
-        _displays.ContainsKey(handle.Id) ? $"Parsec VDD {handle.Id}" : null;
+        _deviceNames.TryGetValue(handle.Id, out var dn) ? dn : null;
 
     private void StartPing()
     {
