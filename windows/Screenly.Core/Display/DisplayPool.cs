@@ -356,27 +356,41 @@ public sealed class DisplayPool : IDisposable
 
     private async Task<bool> TryModeChange(DisplayLease lease, int width, int height, int hz, CancellationToken ct)
     {
-        try
+        if (string.IsNullOrEmpty(lease.DeviceName)) return false;
+        for (int attempt = 0; attempt < 2; attempt++)
         {
-            await _driver.SetModeAsync(lease.Handle, width, height, hz, ct);
-            // verify readback if possible
-            var mode = _driver.ReadMode(lease.DeviceName);
-            if (mode.HasValue)
+            try
             {
-                if (mode.Value.Width != width || mode.Value.Height != height)
-                    return false;
-                if (mode.Value.RefreshHz != 0 && Math.Abs(mode.Value.RefreshHz - hz) > 1)
-                    return false;
+                await _driver.SetModeAsync(lease.Handle, width, height, hz, ct);
+                var mode = _driver.ReadMode(lease.DeviceName);
+                bool ok;
+                if (mode.HasValue)
+                {
+                    ok = mode.Value.Width == width && mode.Value.Height == height &&
+                        (mode.Value.RefreshHz == 0 || Math.Abs(mode.Value.RefreshHz - hz) <= 1);
+                }
+                else
+                {
+                    ok = true;
+                }
+                if (ok)
+                {
+                    lease.Width = width;
+                    lease.Height = height;
+                    lease.Hz = hz;
+                    return true;
+                }
             }
-            lease.Width = width;
-            lease.Height = height;
-            lease.Hz = hz;
-            return true;
+            catch
+            {
+                // fall through to retry
+            }
+            if (attempt < 1)
+            {
+                try { await Task.Delay(200, ct); } catch { return false; }
+            }
         }
-        catch
-        {
-            return false;
-        }
+        return false;
     }
 
     private async Task<bool> WaitForRateLimitAsync(CancellationToken ct)

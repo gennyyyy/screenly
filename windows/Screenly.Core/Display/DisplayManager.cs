@@ -92,6 +92,8 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisplayDriver, 
     private const uint DM_DISPLAYFREQUENCY = 0x00400000;
     private const uint CDS_UPDATEREGISTRY = 0x00000001;
     private const int DISP_CHANGE_SUCCESSFUL = 0;
+    private const uint SDC_TOPOLOGY_EXTEND = 0x00000004;
+    private const uint SDC_APPLY = 0x00000080;
 
     private const uint DIGCF_PRESENT = 0x00000002;
     private const uint DIGCF_DEVICEINTERFACE = 0x00000010;
@@ -369,14 +371,37 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisplayDriver, 
         _displays[handle.Id] = index;
         // resolve device name by diffing enumerated Parsec devices
         string? newDevice = null;
-        for (int attempt = 0; attempt < 5 && string.IsNullOrEmpty(newDevice); attempt++)
+        bool settled = false;
+        for (int attempt = 0; attempt < 20 && string.IsNullOrEmpty(newDevice); attempt++)
         {
             try { await Task.Delay(100, ct); } catch { break; }
             ct.ThrowIfCancellationRequested();
             var after = GdiCapture.EnumerateParsecDevices();
-            newDevice = after.FirstOrDefault(d => !beforeDevices.Contains(d));
+            var diff = after.Where(d => !beforeDevices.Contains(d)).ToList();
+            if (diff.Count != 1)
+            {
+                if (!settled)
+                {
+                    try { await Task.Delay(500, ct); } catch { break; }
+                    ct.ThrowIfCancellationRequested();
+                    after = GdiCapture.EnumerateParsecDevices();
+                    diff = after.Where(d => !beforeDevices.Contains(d)).ToList();
+                    settled = true;
+                }
+                if (diff.Count != 1) continue;
+            }
+            var candidate = diff[0];
+            if (!candidate.Contains("Parsec", StringComparison.OrdinalIgnoreCase))
+            {
+                Log($"CreateAsync: resolved device '{candidate}' does not contain 'Parsec'; retrying");
+                continue;
+            }
+            newDevice = candidate;
         }
         if (!string.IsNullOrEmpty(newDevice)) _deviceNames[handle.Id] = newDevice!;
+        // Ensure Windows extends the desktop to the new display before mode application.
+        try { SetDisplayConfig(0, IntPtr.Zero, 0, IntPtr.Zero, SDC_TOPOLOGY_EXTEND | SDC_APPLY); }
+        catch (Exception ex) { Log($"CreateAsync: SetDisplayConfig topology extend failed: {ex.Message}"); }
         StartPing();
         return handle;
     }
