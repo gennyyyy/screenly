@@ -369,6 +369,9 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisplayDriver, 
         try { IoControl(VDD_IOCTL_UPDATE, new byte[32], null, 1000); } catch { }
         var handle = new DisplayHandle(_nextId++);
         _displays[handle.Id] = index;
+        // Ensure Windows extends the desktop to the new display so it gets enumerated.
+        try { SetDisplayConfig(0, IntPtr.Zero, 0, IntPtr.Zero, SDC_TOPOLOGY_EXTEND | SDC_APPLY); }
+        catch (Exception ex) { Log($"CreateAsync: SetDisplayConfig topology extend failed: {ex.Message}"); }
         // resolve device name by diffing enumerated Parsec devices
         string? newDevice = null;
         for (int attempt = 0; attempt < 100 && string.IsNullOrEmpty(newDevice); attempt++)
@@ -379,15 +382,18 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisplayDriver, 
             var diff = after.Where(d => !beforeDevices.Contains(d)).ToList();
             Log($"CreateAsync: device name resolution attempt {attempt + 1}/100 diffCount={diff.Count}");
             if (diff.Count != 1) continue;
-            var candidate = diff[0];
-            if (!candidate.Contains("Parsec", StringComparison.OrdinalIgnoreCase))
-            {
-                Log($"CreateAsync: resolved device '{candidate}' does not contain 'Parsec'; retrying");
-                continue;
-            }
-            newDevice = candidate;
+            newDevice = diff[0];
         }
-        if (!string.IsNullOrEmpty(newDevice)) _deviceNames[handle.Id] = newDevice!;
+        if (!string.IsNullOrEmpty(newDevice))
+        {
+            if (!newDevice.Contains("Parsec", StringComparison.OrdinalIgnoreCase))
+                Log($"CreateAsync: resolved device '{newDevice}' does not contain 'Parsec'; keeping anyway");
+            _deviceNames[handle.Id] = newDevice!;
+        }
+        else
+        {
+            Log($"CreateAsync: device name resolution failed after 10s; quarantining (no fake name)");
+        }
         StartPing();
         return handle;
     }
