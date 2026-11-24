@@ -64,6 +64,7 @@ begin
   // if a file is still locked, Inno reports it loudly during the copy.
   Exec('taskkill.exe', '/F /IM Screenly.Host.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
   Exec('taskkill.exe', '/F /IM Screenly.Engine.exe /T', '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
+  Exec('taskkill.exe', '/F /IM adb.exe', '', SW_HIDE, ewWaitUntilTerminated, ExitCode);
 end;
 
 function PrepareToInstall(var NeedsRestart: Boolean): String;
