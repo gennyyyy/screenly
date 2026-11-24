@@ -373,21 +373,39 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisplayDriver, 
         try { SetDisplayConfig(0, IntPtr.Zero, 0, IntPtr.Zero, SDC_TOPOLOGY_EXTEND | SDC_APPLY); }
         catch (Exception ex) { Log($"CreateAsync: SetDisplayConfig topology extend failed: {ex.Message}"); }
         // resolve device name by diffing enumerated Parsec devices
+        Log($"CreateAsync: before devices: {string.Join(",", beforeDevices)}");
         string? newDevice = null;
+        int candidateCount = 0;
         for (int attempt = 0; attempt < 100 && string.IsNullOrEmpty(newDevice); attempt++)
         {
             try { await Task.Delay(100, ct); } catch { break; }
             ct.ThrowIfCancellationRequested();
             var after = GdiCapture.EnumerateParsecDevices();
-            var diff = after.Where(d => !beforeDevices.Contains(d)).ToList();
-            Log($"CreateAsync: device name resolution attempt {attempt + 1}/100 diffCount={diff.Count}");
-            if (diff.Count != 1) continue;
-            newDevice = diff[0];
+            Log($"CreateAsync: after devices: {string.Join(",", after)}");
+            var newDevices = after.Where(d => !beforeDevices.Contains(d)).ToList();
+            candidateCount = newDevices.Count;
+            Log($"CreateAsync: device name resolution attempt {attempt + 1}/100 newDeviceCount={newDevices.Count}");
+            if (newDevices.Count == 0) continue;
+            if (newDevices.Count == 1)
+            {
+                newDevice = newDevices[0];
+            }
+            else
+            {
+                // multiple new displays: pick the one with the highest display number (newest)
+                newDevice = newDevices.OrderByDescending(d =>
+                {
+                    int start = d.Length;
+                    while (start > 0 && char.IsDigit(d[start - 1])) start--;
+                    return int.TryParse(d.Substring(start), out var v) ? v : 0;
+                }).First();
+            }
         }
         if (!string.IsNullOrEmpty(newDevice))
         {
             if (!newDevice.Contains("Parsec", StringComparison.OrdinalIgnoreCase))
                 Log($"CreateAsync: resolved device '{newDevice}' does not contain 'Parsec'; keeping anyway");
+            Log($"Resolved device name for handle {handle.Id}: {newDevice} (from {candidateCount} candidates)");
             _deviceNames[handle.Id] = newDevice!;
         }
         else
