@@ -197,6 +197,29 @@ public sealed class DisplayPool : IDisposable
                     lease.Identity = attached.Identity ?? lease.Identity;
                 }
                 _leases.Add(lease);
+
+                // Reject when Windows never mapped the new VDD to a device name.
+                if (string.IsNullOrEmpty(lease.DeviceName))
+                {
+                    _leases.Remove(lease);
+                    _quarantined.Add(lease);
+                    lease.State = LeaseState.Quarantined;
+                    Quarantined++;
+                    LastError = PoolErrorCodes.DisplayMappingFailed;
+                    return null;
+                }
+
+                // Apply + verify the requested mode (registry preset alone is not enough).
+                if (!await TryModeChange(lease, width, height, hz, ct))
+                {
+                    _leases.Remove(lease);
+                    _quarantined.Add(lease);
+                    lease.State = LeaseState.Quarantined;
+                    Quarantined++;
+                    LastError = PoolErrorCodes.NoDisplay;
+                    return null;
+                }
+
                 Created++;
                 _lastMutationUtc = _clock.GetUtcNow();
                 return lease;
@@ -270,7 +293,35 @@ public sealed class DisplayPool : IDisposable
                         ClientId = clientId,
                         SessionId = null
                     };
+                    if (attached.DeviceName != null && attached.DeviceName.Length > 0)
+                    {
+                        lease.DeviceName = attached.DeviceName;
+                        lease.Identity = attached.Identity ?? lease.Identity;
+                    }
                     _leases.Add(lease);
+
+                    // Reject when Windows never mapped the new VDD to a device name.
+                    if (string.IsNullOrEmpty(lease.DeviceName))
+                    {
+                        _leases.Remove(lease);
+                        _quarantined.Add(lease);
+                        lease.State = LeaseState.Quarantined;
+                        Quarantined++;
+                        LastError = PoolErrorCodes.DisplayMappingFailed;
+                        return null;
+                    }
+
+                    // Apply + verify the requested mode (registry preset alone is not enough).
+                    if (!await TryModeChange(lease, width, height, hz, ct))
+                    {
+                        _leases.Remove(lease);
+                        _quarantined.Add(lease);
+                        lease.State = LeaseState.Quarantined;
+                        Quarantined++;
+                        LastError = PoolErrorCodes.NoDisplay;
+                        return null;
+                    }
+
                     Created++;
                     ReplacedInPlace++;
                     _lastMutationUtc = _clock.GetUtcNow();
