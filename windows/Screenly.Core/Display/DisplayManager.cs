@@ -371,25 +371,14 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisplayDriver, 
         _displays[handle.Id] = index;
         // resolve device name by diffing enumerated Parsec devices
         string? newDevice = null;
-        bool settled = false;
-        for (int attempt = 0; attempt < 20 && string.IsNullOrEmpty(newDevice); attempt++)
+        for (int attempt = 0; attempt < 100 && string.IsNullOrEmpty(newDevice); attempt++)
         {
             try { await Task.Delay(100, ct); } catch { break; }
             ct.ThrowIfCancellationRequested();
             var after = GdiCapture.EnumerateParsecDevices();
             var diff = after.Where(d => !beforeDevices.Contains(d)).ToList();
-            if (diff.Count != 1)
-            {
-                if (!settled)
-                {
-                    try { await Task.Delay(500, ct); } catch { break; }
-                    ct.ThrowIfCancellationRequested();
-                    after = GdiCapture.EnumerateParsecDevices();
-                    diff = after.Where(d => !beforeDevices.Contains(d)).ToList();
-                    settled = true;
-                }
-                if (diff.Count != 1) continue;
-            }
+            Log($"CreateAsync: device name resolution attempt {attempt + 1}/100 diffCount={diff.Count}");
+            if (diff.Count != 1) continue;
             var candidate = diff[0];
             if (!candidate.Contains("Parsec", StringComparison.OrdinalIgnoreCase))
             {
@@ -399,9 +388,6 @@ public sealed partial class ParsecVddDisplay : IVirtualDisplay, IDisplayDriver, 
             newDevice = candidate;
         }
         if (!string.IsNullOrEmpty(newDevice)) _deviceNames[handle.Id] = newDevice!;
-        // Ensure Windows extends the desktop to the new display before mode application.
-        try { SetDisplayConfig(0, IntPtr.Zero, 0, IntPtr.Zero, SDC_TOPOLOGY_EXTEND | SDC_APPLY); }
-        catch (Exception ex) { Log($"CreateAsync: SetDisplayConfig topology extend failed: {ex.Message}"); }
         StartPing();
         return handle;
     }

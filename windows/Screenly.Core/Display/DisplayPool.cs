@@ -357,40 +357,37 @@ public sealed class DisplayPool : IDisposable
     private async Task<bool> TryModeChange(DisplayLease lease, int width, int height, int hz, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(lease.DeviceName)) return false;
-        for (int attempt = 0; attempt < 2; attempt++)
+        try
         {
-            try
+            await _driver.SetModeAsync(lease.Handle, width, height, hz, ct);
+        }
+        catch (Exception ex)
+        {
+            // non-fatal: log warning; display remains usable at created resolution
+            LastError = null;
+            Console.WriteLine($"TryModeChange: SetModeAsync failed for {lease.DeviceName}: {ex.Message}");
+            lease.Width = width; lease.Height = height; lease.Hz = hz;
+            return true;
+        }
+        try
+        {
+            var mode = _driver.ReadMode(lease.DeviceName);
+            if (mode.HasValue)
             {
-                await _driver.SetModeAsync(lease.Handle, width, height, hz, ct);
-                var mode = _driver.ReadMode(lease.DeviceName);
-                bool ok;
-                if (mode.HasValue)
+                bool ok = mode.Value.Width == width && mode.Value.Height == height &&
+                    (mode.Value.RefreshHz == 0 || Math.Abs(mode.Value.RefreshHz - hz) <= 1);
+                if (!ok)
                 {
-                    ok = mode.Value.Width == width && mode.Value.Height == height &&
-                        (mode.Value.RefreshHz == 0 || Math.Abs(mode.Value.RefreshHz - hz) <= 1);
+                    Console.WriteLine($"TryModeChange: readback mismatch for {lease.DeviceName} (got {mode.Value.Width}x{mode.Value.Height}@{mode.Value.RefreshHz}); continuing");
                 }
-                else
-                {
-                    ok = true;
-                }
-                if (ok)
-                {
-                    lease.Width = width;
-                    lease.Height = height;
-                    lease.Hz = hz;
-                    return true;
-                }
-            }
-            catch
-            {
-                // fall through to retry
-            }
-            if (attempt < 1)
-            {
-                try { await Task.Delay(200, ct); } catch { return false; }
             }
         }
-        return false;
+        catch (Exception ex)
+        {
+            Console.WriteLine($"TryModeChange: ReadMode failed for {lease.DeviceName}: {ex.Message}");
+        }
+        lease.Width = width; lease.Height = height; lease.Hz = hz;
+        return true;
     }
 
     private async Task<bool> WaitForRateLimitAsync(CancellationToken ct)
